@@ -1,7 +1,8 @@
 {
   "name": "fail-safe",
   "version": "1.0.0",
-  "main": "index.js",
+  "main": "App.js",
+  "description": "Application mobile d'aide à la prise de médicaments pour personnes âgées",
   "scripts": {
     "start": "expo start",
     "android": "expo start --android",
@@ -9,10 +10,28 @@
     "web": "expo start --web"
   },
   "dependencies": {
-    "expo": "~54.0.33",
-    "expo-status-bar": "~3.0.9",
-    "react": "19.1.0",
-    "react-native": "0.81.5"
+    "@react-native-async-storage/async-storage": "1.21.0",
+    "@react-native-community/datetimepicker": "7.6.2",
+    "@react-navigation/native": "^6.1.9",
+    "@react-navigation/stack": "^6.3.20",
+    "@supabase/supabase-js": "^2.39.0",
+    "expo": "~50.0.6",
+    "expo-av": "~13.10.4",
+    "expo-camera": "~14.1.2",
+    "expo-device": "~5.9.3",
+    "expo-image-picker": "~14.7.1",
+    "expo-notifications": "~0.27.6",
+    "expo-speech": "~11.7.0",
+    "expo-splash-screen": "~0.26.4",
+    "expo-status-bar": "~1.11.1",
+    "react": "18.2.0",
+    "react-native": "0.73.4",
+    "react-native-gesture-handler": "~2.14.0",
+    "react-native-safe-area-context": "4.8.2",
+    "react-native-screens": "~3.29.0"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.20.0"
   },
   "private": true
 }

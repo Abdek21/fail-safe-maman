@@ -1,29 +1,77 @@
 {
   "expo": {
-    "name": "fail-safe",
+    "name": "Fail-Safe",
     "slug": "fail-safe",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
-    "newArchEnabled": true,
     "splash": {
-      "image": "./assets/splash-icon.png",
+      "image": "./assets/splash.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#E3F2FD"
     },
+    "assetBundlePatterns": ["**/*"],
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": false,
+      "bundleIdentifier": "com.failsafe.medications",
+      "buildNumber": "1",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Pour photographier la boîte de médicaments et l'afficher lors du rappel.",
+        "NSPhotoLibraryUsageDescription": "Pour sélectionner une photo de la boîte de médicaments depuis la galerie.",
+        "NSMicrophoneUsageDescription": "Non utilisé.",
+        "UIBackgroundModes": ["audio", "fetch", "remote-notification"],
+        "NSUserNotificationsUsageDescription": "Pour envoyer les rappels de médicaments à l'heure prévue."
+      }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
+        "backgroundColor": "#E3F2FD"
       },
-      "edgeToEdgeEnabled": true
+      "package": "com.failsafe.medications",
+      "versionCode": 1,
+      "permissions": [
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE",
+        "RECEIVE_BOOT_COMPLETED",
+        "VIBRATE",
+        "WAKE_LOCK",
+        "SCHEDULE_EXACT_ALARM",
+        "USE_EXACT_ALARM",
+        "POST_NOTIFICATIONS"
+      ]
     },
-    "web": {
-      "favicon": "./assets/favicon.png"
+    "plugins": [
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#1565C0",
+          "sounds": [],
+          "mode": "production"
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "L'accès à la caméra est nécessaire pour photographier vos médicaments."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "L'accès à vos photos est nécessaire pour sélectionner une image de votre médicament."
+        }
+      ],
+      "expo-speech",
+      "expo-av"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "VOTRE_EAS_PROJECT_ID"
+      }
     }
   }
 }
