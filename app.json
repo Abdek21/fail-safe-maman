@@ -7,21 +7,22 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "splash": {
-      "image": "./assets/splash.png",
+      "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#E3F2FD"
     },
-    "assetBundlePatterns": ["**/*"],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.failsafe.medications",
       "buildNumber": "1",
       "infoPlist": {
-        "NSCameraUsageDescription": "Pour photographier la boîte de médicaments et l'afficher lors du rappel.",
-        "NSPhotoLibraryUsageDescription": "Pour sélectionner une photo de la boîte de médicaments depuis la galerie.",
-        "NSMicrophoneUsageDescription": "Non utilisé.",
-        "UIBackgroundModes": ["audio", "fetch", "remote-notification"],
-        "NSUserNotificationsUsageDescription": "Pour envoyer les rappels de médicaments à l'heure prévue."
+        "NSCameraUsageDescription": "Pour photographier la boîte de médicaments.",
+        "NSPhotoLibraryUsageDescription": "Pour sélectionner une photo depuis la galerie.",
+        "UIBackgroundModes": ["fetch", "remote-notification"],
+        "NSUserNotificationsUsageDescription": "Pour envoyer les rappels de médicaments."
       }
     },
     "android": {
@@ -32,45 +33,30 @@
       "package": "com.failsafe.medications",
       "versionCode": 1,
       "permissions": [
-        "CAMERA",
-        "READ_EXTERNAL_STORAGE",
-        "WRITE_EXTERNAL_STORAGE",
-        "RECEIVE_BOOT_COMPLETED",
-        "VIBRATE",
-        "WAKE_LOCK",
-        "SCHEDULE_EXACT_ALARM",
-        "USE_EXACT_ALARM",
-        "POST_NOTIFICATIONS"
+        "android.permission.CAMERA",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.RECEIVE_BOOT_COMPLETED",
+        "android.permission.VIBRATE",
+        "android.permission.WAKE_LOCK",
+        "android.permission.SCHEDULE_EXACT_ALARM",
+        "android.permission.POST_NOTIFICATIONS"
       ]
     },
     "plugins": [
       [
         "expo-notifications",
         {
-          "icon": "./assets/notification-icon.png",
           "color": "#1565C0",
-          "sounds": [],
           "mode": "production"
         }
       ],
-      [
-        "expo-camera",
-        {
-          "cameraPermission": "L'accès à la caméra est nécessaire pour photographier vos médicaments."
-        }
-      ],
-      [
-        "expo-image-picker",
-        {
-          "photosPermission": "L'accès à vos photos est nécessaire pour sélectionner une image de votre médicament."
-        }
-      ],
-      "expo-speech",
-      "expo-av"
+      "expo-camera",
+      "expo-image-picker"
     ],
     "extra": {
       "eas": {
-        "projectId": "VOTRE_EAS_PROJECT_ID"
+        "projectId": "67bea56b-76e3-47dd-9709-ac60102593eb"
       }
     }
   }

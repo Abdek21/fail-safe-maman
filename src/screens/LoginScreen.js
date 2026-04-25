@@ -1,10 +1,9 @@
-// ============================================================
-// LoginScreen.js
-// Écran de connexion — s'affiche UNE SEULE FOIS dans la vie de l'app
-// grâce à la session persistante Supabase
-// ============================================================
+// ================================================================
+// LoginScreen.js — Design "Santé Douce"
+// S'affiche UNE SEULE FOIS grâce à la session persistante Supabase
+// ================================================================
 
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   View,
   Text,
@@ -16,263 +15,343 @@ import {
   ActivityIndicator,
   Alert,
   StyleSheet,
-  Image,
+  Animated,
 } from 'react-native';
 import { supabase } from '../services/SupabaseClient';
-import { COLORS, TYPOGRAPHY, SIZES, GlobalStyles } from '../styles/styles';
+import { COLORS, FONTS, SIZES, RADIUS, SHADOWS, G } from '../styles/styles';
 
-const LoginScreen = () => {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [mode, setMode] = useState('login'); // 'login' ou 'register'
-  const [error, setError] = useState(null);
+// ================================================================
+export default function LoginScreen() {
+  const [email,        setEmail]        = useState('');
+  const [password,     setPassword]     = useState('');
+  const [isLoading,    setIsLoading]    = useState(false);
+  const [mode,         setMode]         = useState('login'); // 'login' | 'register'
+  const [error,        setError]        = useState(null);
+  const [focusField,   setFocusField]   = useState(null);
 
-  // ---- Connexion avec email/mot de passe ----
+  // Feedback press sur le bouton
+  const btnScale = useRef(new Animated.Value(1)).current;
+  const onPressIn  = () => Animated.spring(btnScale, { toValue: 0.97, useNativeDriver: true, speed: 50 }).start();
+  const onPressOut = () => Animated.spring(btnScale, { toValue: 1.00, useNativeDriver: true, speed: 50 }).start();
+
+  // ── Connexion ────────────────────────────────────────────────
   const handleLogin = async () => {
     if (!email.trim() || !password.trim()) {
-      setError('Veuillez remplir tous les champs.');
+      setError('Veuillez remplir votre email et votre mot de passe.');
       return;
     }
-
     setIsLoading(true);
     setError(null);
-
     try {
-      const { error: signInError } = await supabase.auth.signInWithPassword({
+      const { error: err } = await supabase.auth.signInWithPassword({
         email: email.trim().toLowerCase(),
         password,
       });
-
-      if (signInError) throw signInError;
-      // La navigation sera gérée automatiquement par le listener onAuthStateChange dans App.js
-
-    } catch (err) {
+      if (err) throw err;
+      // Navigation gérée par onAuthStateChange dans App.js
+    } catch {
       setError('Email ou mot de passe incorrect. Réessayez.');
-      console.error('[LoginScreen] Erreur connexion :', err.message);
     } finally {
       setIsLoading(false);
     }
   };
 
-  // ---- Création de compte ----
+  // ── Inscription ──────────────────────────────────────────────
   const handleRegister = async () => {
     if (!email.trim() || !password.trim()) {
-      setError('Veuillez remplir tous les champs.');
+      setError('Veuillez remplir votre email et votre mot de passe.');
       return;
     }
-
     if (password.length < 6) {
-      setError('Le mot de passe doit faire au moins 6 caractères.');
+      setError('Le mot de passe doit contenir au moins 6 caractères.');
       return;
     }
-
     setIsLoading(true);
     setError(null);
-
     try {
-      const { error: signUpError } = await supabase.auth.signUp({
+      const { error: err } = await supabase.auth.signUp({
         email: email.trim().toLowerCase(),
         password,
       });
-
-      if (signUpError) throw signUpError;
-
+      if (err) throw err;
       Alert.alert(
-        'Compte créé !',
-        'Vérifiez votre email pour confirmer votre inscription, puis connectez-vous.',
+        '✅ Compte créé !',
+        'Vérifiez votre email puis connectez-vous.',
         [{ text: 'OK', onPress: () => setMode('login') }]
       );
-    } catch (err) {
-      setError('Impossible de créer le compte. Cet email est peut-être déjà utilisé.');
-      console.error('[LoginScreen] Erreur inscription :', err.message);
+    } catch {
+      setError("Impossible de créer le compte. Cet email est peut-être déjà utilisé.");
     } finally {
       setIsLoading(false);
     }
   };
 
+  const submit = mode === 'login' ? handleLogin : handleRegister;
+
+  // ================================================================
   return (
     <KeyboardAvoidingView
-      style={styles.container}
+      style={styles.root}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
       <ScrollView
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={styles.scroll}
         keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
       >
-        {/* Logo et titre */}
-        <View style={styles.header}>
-          <Text style={styles.emoji}>💊</Text>
-          <Text style={styles.appName}>Fail-Safe</Text>
-          <Text style={styles.tagline}>Vos médicaments, jamais oubliés</Text>
+
+        {/* ── Blobs décoratifs ─────────────────────────────── */}
+        <View style={styles.blob1} />
+        <View style={styles.blob2} />
+        <View style={styles.blob3} />
+
+        {/* ── Logo ─────────────────────────────────────────── */}
+        <View style={styles.logoRow}>
+          <View style={styles.logoPill}>
+            <Text style={styles.logoPillEmoji}>💊</Text>
+          </View>
+          <View>
+            <Text style={styles.logoName}>Fail-Safe</Text>
+            <Text style={styles.logoTagline}>Jamais un oubli</Text>
+          </View>
         </View>
 
-        {/* Formulaire */}
-        <View style={styles.form}>
-          <Text style={styles.formTitle}>
-            {mode === 'login' ? 'Connexion' : 'Créer un compte'}
-          </Text>
+        {/* ── Headline ─────────────────────────────────────── */}
+        <Text style={styles.headline}>
+          {'Vos médicaments,\n'}
+          <Text style={styles.headlineAccent}>sous contrôle.</Text>
+        </Text>
+        <Text style={styles.headlineSub}>
+          {mode === 'login'
+            ? 'Connectez-vous pour accéder à vos rappels'
+            : 'Créez votre espace en quelques secondes'}
+        </Text>
 
-          {/* Bannière d'erreur */}
+        {/* ── Card formulaire ──────────────────────────────── */}
+        <View style={styles.card}>
+
+          {/* Erreur */}
           {error && (
-            <View style={GlobalStyles.errorBanner}>
-              <Text style={GlobalStyles.errorText}>⚠ {error}</Text>
+            <View style={G.errorBox}>
+              <Text style={{ fontSize: 20 }}>⚠️</Text>
+              <Text style={G.errorTxt}>{error}</Text>
             </View>
           )}
 
           {/* Email */}
-          <View style={GlobalStyles.inputContainer}>
-            <Text style={GlobalStyles.inputLabel}>Adresse email</Text>
+          <View style={G.inputWrap}>
+            <Text style={G.inputLabel}>Adresse email</Text>
             <TextInput
-              style={GlobalStyles.input}
+              style={[G.input, focusField === 'email' && G.inputFocus]}
               value={email}
-              onChangeText={(text) => { setEmail(text); setError(null); }}
-              placeholder="exemple@email.com"
-              placeholderTextColor={COLORS.border}
+              onChangeText={(t) => { setEmail(t); setError(null); }}
+              placeholder="maman@famille.fr"
+              placeholderTextColor={COLORS.textSoft}
               keyboardType="email-address"
               autoCapitalize="none"
               autoComplete="email"
               returnKeyType="next"
+              onFocus={() => setFocusField('email')}
+              onBlur={()  => setFocusField(null)}
               accessible
-              accessibilityLabel="Champ email"
+              accessibilityLabel="Adresse email"
             />
           </View>
 
           {/* Mot de passe */}
-          <View style={GlobalStyles.inputContainer}>
-            <Text style={GlobalStyles.inputLabel}>Mot de passe</Text>
+          <View style={G.inputWrap}>
+            <Text style={G.inputLabel}>Mot de passe</Text>
             <TextInput
-              style={GlobalStyles.input}
+              style={[G.input, focusField === 'pwd' && G.inputFocus]}
               value={password}
-              onChangeText={(text) => { setPassword(text); setError(null); }}
-              placeholder="Votre mot de passe"
-              placeholderTextColor={COLORS.border}
+              onChangeText={(t) => { setPassword(t); setError(null); }}
+              placeholder="••••••••"
+              placeholderTextColor={COLORS.textSoft}
               secureTextEntry
               autoComplete="password"
               returnKeyType="done"
-              onSubmitEditing={mode === 'login' ? handleLogin : handleRegister}
+              onFocus={() => setFocusField('pwd')}
+              onBlur={()  => setFocusField(null)}
+              onSubmitEditing={submit}
               accessible
-              accessibilityLabel="Champ mot de passe"
+              accessibilityLabel="Mot de passe"
             />
           </View>
 
           {/* Bouton principal */}
+          <Animated.View style={{ transform: [{ scale: btnScale }] }}>
+            <TouchableOpacity
+              style={G.btnCoral}
+              onPress={submit}
+              onPressIn={onPressIn}
+              onPressOut={onPressOut}
+              disabled={isLoading}
+              activeOpacity={1}
+              accessible
+              accessibilityRole="button"
+              accessibilityLabel={mode === 'login' ? 'Se connecter' : 'Créer mon compte'}
+            >
+              {isLoading
+                ? <ActivityIndicator size="large" color={COLORS.white} />
+                : <Text style={G.btnCoralTxt}>
+                    {mode === 'login' ? '🔐  Se connecter' : '✅  Créer mon compte'}
+                  </Text>
+              }
+            </TouchableOpacity>
+          </Animated.View>
+
+          {/* Basculer login ↔ register */}
           <TouchableOpacity
-            style={GlobalStyles.buttonPrimary}
-            onPress={mode === 'login' ? handleLogin : handleRegister}
-            disabled={isLoading}
-            activeOpacity={0.8}
+            style={styles.switchWrap}
+            onPress={() => { setMode(mode === 'login' ? 'register' : 'login'); setError(null); }}
             accessible
             accessibilityRole="button"
-            accessibilityLabel={mode === 'login' ? 'Se connecter' : 'Créer mon compte'}
           >
-            {isLoading ? (
-              <ActivityIndicator size="large" color={COLORS.textLight} />
-            ) : (
-              <Text style={GlobalStyles.buttonPrimaryText}>
-                {mode === 'login' ? '🔐 Se connecter' : '✅ Créer mon compte'}
-              </Text>
-            )}
-          </TouchableOpacity>
-
-          {/* Basculer entre login et register */}
-          <TouchableOpacity
-            style={styles.switchMode}
-            onPress={() => { setMode(mode === 'login' ? 'register' : 'login'); setError(null); }}
-          >
-            <Text style={styles.switchModeText}>
+            <Text style={styles.switchTxt}>
               {mode === 'login'
-                ? "Pas encore de compte ? Créer un compte"
-                : "Déjà un compte ? Se connecter"
-              }
+                ? "Pas encore de compte ?  Créer un accès"
+                : "Déjà un compte ?  Se connecter"}
             </Text>
           </TouchableOpacity>
         </View>
 
-        {/* Mention sécurité */}
-        <Text style={styles.securityNote}>
-          🔒 Vos données sont sécurisées et chiffrées
-        </Text>
+        {/* ── Badge sécurité ───────────────────────────────── */}
+        <View style={styles.secureBadge}>
+          <Text style={styles.secureTxt}>🔒  Données chiffrées · Supabase</Text>
+        </View>
+
       </ScrollView>
     </KeyboardAvoidingView>
   );
-};
+}
 
+// ================================================================
+// STYLES
+// ================================================================
 const styles = StyleSheet.create({
-  container: {
+
+  root: {
     flex: 1,
-    backgroundColor: COLORS.primaryLight,
+    backgroundColor: COLORS.warmWhite,
   },
 
-  scrollContent: {
+  scroll: {
     flexGrow: 1,
+    paddingHorizontal: SIZES.padH,
+    paddingTop: SIZES.padTop,
+    paddingBottom: 48,
+  },
+
+  // Blobs décoratifs (cercles flous colorés)
+  blob1: {
+    position: 'absolute',
+    width: 340, height: 340,
+    borderRadius: 170,
+    backgroundColor: COLORS.coralLight,
+    top: -100, right: -110,
+    opacity: 0.85,
+  },
+  blob2: {
+    position: 'absolute',
+    width: 240, height: 240,
+    borderRadius: 120,
+    backgroundColor: COLORS.amberLight,
+    top: 200, left: -90,
+    opacity: 0.65,
+  },
+  blob3: {
+    position: 'absolute',
+    width: 180, height: 180,
+    borderRadius: 90,
+    backgroundColor: COLORS.sageLight,
+    bottom: 120, right: -50,
+    opacity: 0.5,
+  },
+
+  // Logo
+  logoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
+    marginBottom: 44,
+  },
+  logoPill: {
+    width: 70, height: 70,
+    borderRadius: 22,
+    backgroundColor: COLORS.coral,
     justifyContent: 'center',
-    paddingHorizontal: SIZES.padding.screen,
-    paddingVertical: SIZES.spacing.xl,
-  },
-
-  header: {
     alignItems: 'center',
-    marginBottom: SIZES.spacing.xl,
+    ...SHADOWS.coral,
   },
-
-  emoji: {
-    fontSize: 80,
-    marginBottom: SIZES.spacing.sm,
-  },
-
-  appName: {
-    fontSize: TYPOGRAPHY.xxl,
-    fontWeight: TYPOGRAPHY.black,
-    color: COLORS.primary,
-    letterSpacing: -1,
-  },
-
-  tagline: {
-    fontSize: TYPOGRAPHY.xs,
-    color: COLORS.textMuted,
-    marginTop: SIZES.spacing.xs,
-    textAlign: 'center',
-  },
-
-  form: {
-    backgroundColor: COLORS.white,
-    borderRadius: 24,
-    padding: SIZES.padding.card,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 12,
-    elevation: 6,
-  },
-
-  formTitle: {
-    fontSize: TYPOGRAPHY.md,
-    fontWeight: TYPOGRAPHY.bold,
+  logoPillEmoji: { fontSize: 34 },
+  logoName: {
+    fontSize: FONTS.lg,
+    fontWeight: FONTS.black,
     color: COLORS.textDark,
-    marginBottom: SIZES.spacing.md,
-    textAlign: 'center',
+    letterSpacing: -1.5,
+    lineHeight: FONTS.lg,
+  },
+  logoTagline: {
+    fontSize: FONTS.xs - 2,
+    fontWeight: FONTS.bold,
+    color: COLORS.textSoft,
+    marginTop: 5,
   },
 
-  switchMode: {
-    marginTop: SIZES.spacing.md,
-    padding: SIZES.spacing.sm,
+  // Headline
+  headline: {
+    fontSize: FONTS.lg,
+    fontWeight: FONTS.black,
+    color: COLORS.textDark,
+    lineHeight: FONTS.lh(FONTS.lg),
+    letterSpacing: -1.2,
+    marginBottom: 12,
+  },
+  headlineAccent: {
+    color: COLORS.coral,
+    fontStyle: 'italic',
+  },
+  headlineSub: {
+    fontSize: FONTS.xs,
+    fontWeight: FONTS.regular,
+    color: COLORS.textSoft,
+    lineHeight: FONTS.lh(FONTS.xs),
+    marginBottom: 32,
+  },
+
+  // Card formulaire
+  card: {
+    backgroundColor: COLORS.warmWhite,
+    borderRadius: RADIUS.xl,
+    padding: 28,
+    marginBottom: 28,
+    ...SHADOWS.md,
+  },
+
+  // Switch mode
+  switchWrap: {
+    marginTop: 20,
+    paddingVertical: 14,
     alignItems: 'center',
   },
-
-  switchModeText: {
-    fontSize: TYPOGRAPHY.xs,
-    color: COLORS.primary,
-    fontWeight: TYPOGRAPHY.medium,
+  switchTxt: {
+    fontSize: FONTS.xs,
+    fontWeight: FONTS.bold,
+    color: COLORS.coral,
     textDecorationLine: 'underline',
   },
 
-  securityNote: {
-    textAlign: 'center',
-    fontSize: TYPOGRAPHY.xs - 2,
-    color: COLORS.textMuted,
-    marginTop: SIZES.spacing.lg,
+  // Badge sécurité
+  secureBadge: {
+    alignSelf: 'center',
+    backgroundColor: COLORS.sageLight,
+    borderRadius: RADIUS.full,
+    paddingHorizontal: 22,
+    paddingVertical: 11,
+  },
+  secureTxt: {
+    fontSize: FONTS.xs - 2,
+    fontWeight: FONTS.bold,
+    color: COLORS.sageDark,
   },
 });
-
-export default LoginScreen;

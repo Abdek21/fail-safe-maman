@@ -1,8 +1,10 @@
-// ============================================================
-// DashboardScreen.js
-// Écran principal "Mode Maman"
-// Deux états : CALME (fond bleu doux) et ALERTE (fond rouge + voix)
-// ============================================================
+// ================================================================
+// DashboardScreen.js — Design "Santé Douce"
+//
+// MODE CALME  : fond crème, hero card sauge, liste médicaments
+// MODE ALERTE : dégradé corail chaud, anneau animé, bouton géant
+// VALIDATION  : arrêt voix + vibration + log Supabase + confirmation
+// ================================================================
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
@@ -18,172 +20,189 @@ import {
   ActivityIndicator,
   Alert,
 } from 'react-native';
-import { useFocusEffect } from '@react-navigation/native';
-import { getMedications, logIntake } from '../services/SupabaseClient';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useFocusEffect }  from '@react-navigation/native';
+
+import { getMedications, logIntake, supabase }   from '../services/SupabaseClient';
 import { startVoiceAlert, stopVoiceAlert, speakConfirmation } from '../services/VoiceService';
-import { setupNotificationReceivedListener } from '../services/NotificationManager';
-import { COLORS, TYPOGRAPHY, SIZES, GlobalStyles } from '../styles/styles';
-import { supabase } from '../services/SupabaseClient';
+import { setupNotificationReceivedListener }      from '../services/NotificationManager';
+import { COLORS, FONTS, SIZES, RADIUS, SHADOWS, G } from '../styles/styles';
 
-// Pattern de vibration pour l'alerte (répété toutes les 3s)
-const VIBRATION_PATTERN = [0, 800, 500, 800, 500, 800];
+// Pattern de vibration répété
+const VIBRATION_PATTERN = [0, 700, 400, 700, 400, 700];
 
-const DashboardScreen = ({ navigation }) => {
-  // ---- ÉTAT ----
-  const [medications, setMedications] = useState([]);
-  const [activeMedication, setActiveMedication] = useState(null); // Médicament en cours d'alerte
-  const [isAlertMode, setIsAlertMode] = useState(false);
-  const [nextReminder, setNextReminder] = useState(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [currentTime, setCurrentTime] = useState(new Date());
+// ================================================================
+export default function DashboardScreen({ navigation }) {
 
-  // Animation du bouton de validation (pulsation)
-  const pulseAnim = useRef(new Animated.Value(1)).current;
-  // Intervalle de vérification des rappels
-  const checkIntervalRef = useRef(null);
-  // Intervalle de vibration
+  // ── État ───────────────────────────────────────────────────
+  const [medications,      setMedications]      = useState([]);
+  const [activeMedication, setActiveMedication] = useState(null);
+  const [isAlertMode,      setIsAlertMode]      = useState(false);
+  const [nextReminder,     setNextReminder]      = useState(null);
+  const [isLoading,        setIsLoading]         = useState(true);
+  const [currentTime,      setCurrentTime]       = useState(new Date());
+  const [isValidating,     setIsValidating]      = useState(false); // évite double-tap
+
+  // ── Animations ─────────────────────────────────────────────
+  const pulseAnim  = useRef(new Animated.Value(1)).current; // bouton validation
+  const ringAnim   = useRef(new Animated.Value(1)).current; // anneau photo
+  const btnScale   = useRef(new Animated.Value(1)).current; // feedback press
+
+  // ── Refs intervalles ───────────────────────────────────────
+  const checkIntervalRef     = useRef(null);
   const vibrationIntervalRef = useRef(null);
+  const pulseLoop            = useRef(null);
+  const ringLoop             = useRef(null);
 
-  // ============================================================
-  // CHARGEMENT DES DONNÉES
-  // ============================================================
+  // ──────────────────────────────────────────────────────────
+  // CHARGEMENT MÉDICAMENTS
+  // ──────────────────────────────────────────────────────────
   const loadMedications = useCallback(async () => {
     try {
       const data = await getMedications();
-      setMedications(data);
-      computeNextReminder(data);
+      setMedications(data ?? []);
+      computeNextReminder(data ?? []);
     } catch (err) {
-      console.error('[Dashboard] Erreur chargement médicaments :', err.message);
+      console.error('[Dashboard] Chargement :', err.message);
     } finally {
       setIsLoading(false);
     }
   }, []);
 
-  // Recharge à chaque fois que l'écran est affiché
-  useFocusEffect(
-    useCallback(() => {
-      loadMedications();
-    }, [loadMedications])
-  );
+  // Recharge à chaque fois que l'écran redevient actif
+  useFocusEffect(useCallback(() => { loadMedications(); }, [loadMedications]));
 
-  // ============================================================
-  // HORLOGE EN TEMPS RÉEL
-  // ============================================================
+  // ──────────────────────────────────────────────────────────
+  // HORLOGE TEMPS RÉEL
+  // ──────────────────────────────────────────────────────────
   useEffect(() => {
-    const clockInterval = setInterval(() => {
-      setCurrentTime(new Date());
-    }, 1000);
-
-    return () => clearInterval(clockInterval);
+    const id = setInterval(() => setCurrentTime(new Date()), 1000);
+    return () => clearInterval(id);
   }, []);
 
-  // ============================================================
+  // ──────────────────────────────────────────────────────────
   // VÉRIFICATION DES RAPPELS — toutes les 30 secondes
-  // ============================================================
+  // ──────────────────────────────────────────────────────────
   useEffect(() => {
-    // Vérification immédiate au montage
     if (medications.length > 0) checkForDueReminders(medications);
 
-    // Puis toutes les 30 secondes
     checkIntervalRef.current = setInterval(() => {
       if (medications.length > 0) checkForDueReminders(medications);
-    }, 30000);
+    }, 30_000);
 
     return () => {
       if (checkIntervalRef.current) clearInterval(checkIntervalRef.current);
     };
   }, [medications]);
 
-  // ============================================================
-  // LISTENER NOTIFICATIONS
-  // ============================================================
+  // ──────────────────────────────────────────────────────────
+  // LISTENER NOTIFICATIONS (tap depuis la barre de notif)
+  // ──────────────────────────────────────────────────────────
   useEffect(() => {
     const cleanup = setupNotificationReceivedListener((notification) => {
       const medId = notification.request.content.data?.medicationId;
-      if (medId) triggerAlertForMedication(medId);
+      if (medId) triggerAlert(medId);
     });
     return cleanup;
   }, [medications]);
 
-  // ============================================================
-  // ANIMATION PULSATION DU BOUTON (en mode alerte)
-  // ============================================================
+  // ──────────────────────────────────────────────────────────
+  // ANIMATIONS MODE ALERTE
+  // ──────────────────────────────────────────────────────────
   useEffect(() => {
     if (isAlertMode) {
-      // Animation de pulsation continue
-      Animated.loop(
+      // Pulsation "breathe" lente du bouton validation
+      pulseLoop.current = Animated.loop(
         Animated.sequence([
-          Animated.timing(pulseAnim, { toValue: 1.05, duration: 600, useNativeDriver: true }),
-          Animated.timing(pulseAnim, { toValue: 1.0,  duration: 600, useNativeDriver: true }),
+          Animated.timing(pulseAnim, { toValue: 1.05, duration: 950, useNativeDriver: true }),
+          Animated.timing(pulseAnim, { toValue: 1.00, duration: 950, useNativeDriver: true }),
         ])
-      ).start();
+      );
+      pulseLoop.current.start();
+
+      // Anneau pulsant autour de la photo
+      ringLoop.current = Animated.loop(
+        Animated.sequence([
+          Animated.timing(ringAnim, { toValue: 1.10, duration: 1300, useNativeDriver: true }),
+          Animated.timing(ringAnim, { toValue: 1.00, duration: 1300, useNativeDriver: true }),
+        ])
+      );
+      ringLoop.current.start();
     } else {
+      pulseLoop.current?.stop();
+      ringLoop.current?.stop();
       pulseAnim.setValue(1);
+      ringAnim.setValue(1);
     }
   }, [isAlertMode]);
 
-  // ============================================================
-  // LOGIQUE : Vérifier si un rappel est dû maintenant
-  // ============================================================
+  // ──────────────────────────────────────────────────────────
+  // DÉCLENCHEMENT ALERTE
+  // ──────────────────────────────────────────────────────────
   const checkForDueReminders = (meds) => {
     const now = new Date();
-    const currentHour = now.getHours();
-    const currentMinute = now.getMinutes();
-    const currentDay = now.getDay(); // 0=Dim, 1=Lun ... 6=Sam
+    const h = now.getHours();
+    const m = now.getMinutes();
+    const d = now.getDay(); // 0=Dim … 6=Sam
 
     for (const med of meds) {
-      const [remHour, remMin] = med.reminder_time.split(':').map(Number);
+      const [rh, rm] = med.reminder_time.split(':').map(Number);
+      if (h !== rh || m !== rm) continue;
 
-      // L'heure correspond-elle (à la minute près) ?
-      if (currentHour !== remHour || currentMinute !== remMin) continue;
+      const dayOk =
+        med.frequency === 'daily' ||
+        (med.frequency === 'weekly' && med.specific_days?.includes(d));
 
-      // Le jour correspond-il ?
-      const isDayMatch = med.frequency === 'daily'
-        || (med.frequency === 'weekly' && med.specific_days?.includes(currentDay));
-
-      if (isDayMatch) {
-        triggerAlertForMedication(med.id);
-        return; // Un seul rappel à la fois
+      if (dayOk) {
+        triggerAlert(med.id);
+        return; // un seul rappel à la fois
       }
     }
   };
 
-  /**
-   * Active le mode alerte pour un médicament spécifique
-   * @param {string} medicationId
-   */
-  const triggerAlertForMedication = (medicationId) => {
+  const triggerAlert = (medicationId) => {
+    // Si une alerte est déjà active, on ne l'écrase pas
+    if (isAlertMode) return;
+
     const med = medications.find((m) => m.id === medicationId);
     if (!med) return;
 
-    console.log(`[Dashboard] 🔔 Alerte déclenchée pour : ${med.name}`);
+    console.log(`[Dashboard] 🔔 Alerte → ${med.name}`);
 
     setActiveMedication(med);
     setIsAlertMode(true);
 
-    // Démarrage de la boucle vocale
+    // Voix en boucle toutes les 15s
     startVoiceAlert(med.name, med.dosage);
 
     // Vibrations répétées
     if (Platform.OS !== 'web') {
-      Vibration.vibrate(VIBRATION_PATTERN, true); // true = répéter
-      vibrationIntervalRef.current = setInterval(() => {
-        Vibration.vibrate(VIBRATION_PATTERN, true);
-      }, 15000);
+      Vibration.vibrate(VIBRATION_PATTERN, true);
+      vibrationIntervalRef.current = setInterval(
+        () => Vibration.vibrate(VIBRATION_PATTERN, true),
+        15_000
+      );
     }
   };
 
-  // ============================================================
-  // VALIDATION — L'utilisateur appuie sur le bouton vert
-  // ============================================================
-  const handleMedicationTaken = async () => {
-    if (!activeMedication) return;
+  // ──────────────────────────────────────────────────────────
+  // VALIDATION — bouton "J'AI PRIS MON MÉDICAMENT"
+  // ──────────────────────────────────────────────────────────
+  const handleTaken = async () => {
+    if (!activeMedication || isValidating) return;
+    setIsValidating(true);
+
+    // Micro-animation de press
+    Animated.sequence([
+      Animated.timing(btnScale, { toValue: 0.93, duration: 100, useNativeDriver: true }),
+      Animated.spring(btnScale,  { toValue: 1.00, useNativeDriver: true, speed: 20 }),
+    ]).start();
 
     try {
-      // 1. Arrêt de l'alerte vocale
+      // 1. Arrêt voix
       await stopVoiceAlert();
 
-      // 2. Arrêt des vibrations
+      // 2. Arrêt vibrations
       if (Platform.OS !== 'web') {
         Vibration.cancel();
         if (vibrationIntervalRef.current) {
@@ -192,466 +211,516 @@ const DashboardScreen = ({ navigation }) => {
         }
       }
 
-      // 3. Enregistrement dans Supabase (log de sécurité)
+      // 3. Log de sécurité dans Supabase
       await logIntake(activeMedication.id);
-      console.log(`[Dashboard] ✅ Prise enregistrée pour : ${activeMedication.name}`);
+      console.log(`[Dashboard] ✅ Prise enregistrée → ${activeMedication.name}`);
 
       // 4. Message vocal de confirmation
       speakConfirmation(activeMedication.name);
 
-      // 5. Retour au mode calme
+      // 5. Retour mode calme
       setIsAlertMode(false);
       setActiveMedication(null);
 
-      // 6. Recalcul du prochain rappel
+      // 6. Recalcul prochain rappel
       computeNextReminder(medications);
 
     } catch (err) {
-      Alert.alert('Erreur', 'Impossible d\'enregistrer la prise. Vérifiez votre connexion.');
-      console.error('[Dashboard] Erreur validation :', err.message);
+      Alert.alert('Erreur', "Impossible d'enregistrer la prise. Vérifiez votre connexion.");
+      console.error('[Dashboard] Validation :', err.message);
+    } finally {
+      setIsValidating(false);
     }
   };
 
-  // ============================================================
-  // CALCUL DU PROCHAIN RAPPEL
-  // ============================================================
+  // ──────────────────────────────────────────────────────────
+  // PROCHAIN RAPPEL
+  // ──────────────────────────────────────────────────────────
   const computeNextReminder = (meds) => {
-    if (!meds || meds.length === 0) {
-      setNextReminder(null);
-      return;
-    }
-
+    if (!meds?.length) return setNextReminder(null);
     const now = new Date();
-    let nearest = null;
-    let nearestTime = Infinity;
+    let nearest = null, nearestDiff = Infinity;
 
     for (const med of meds) {
       const [h, m] = med.reminder_time.split(':').map(Number);
-      const next = new Date();
-      next.setHours(h, m, 0, 0);
-
-      // Si l'heure est déjà passée aujourd'hui, planifier pour demain
-      if (next <= now) next.setDate(next.getDate() + 1);
-
-      const diff = next - now;
-      if (diff < nearestTime) {
-        nearestTime = diff;
-        nearest = { med, time: next };
-      }
+      const t = new Date();
+      t.setHours(h, m, 0, 0);
+      if (t <= now) t.setDate(t.getDate() + 1);
+      const diff = t - now;
+      if (diff < nearestDiff) { nearestDiff = diff; nearest = { med, time: t }; }
     }
-
     setNextReminder(nearest);
   };
 
-  // ============================================================
-  // UTILITAIRES D'AFFICHAGE
-  // ============================================================
-  const formatTime = (date) => {
-    if (!date) return '--:--';
-    return date.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+  // ──────────────────────────────────────────────────────────
+  // HELPERS
+  // ──────────────────────────────────────────────────────────
+  const fmt = (d) =>
+    d ? d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '--:--';
+
+  const fmtNext = (r) => {
+    if (!r) return 'Aucun rappel configuré';
+    const isToday = r.time.toDateString() === new Date().toDateString();
+    return `${r.med.name}  ·  ${fmt(r.time)}${isToday ? '' : '  (demain)'}`;
   };
 
-  const formatNextReminder = (reminder) => {
-    if (!reminder) return 'Aucun rappel configuré';
-    const timeStr = formatTime(reminder.time);
-    const name = reminder.med.name;
-    const isToday = reminder.time.toDateString() === new Date().toDateString();
-    return isToday
-      ? `${name} à ${timeStr} aujourd'hui`
-      : `${name} à ${timeStr} demain`;
-  };
+  const handleLogout = () =>
+    Alert.alert('Déconnexion', 'Voulez-vous vraiment vous déconnecter ?', [
+      { text: 'Annuler', style: 'cancel' },
+      { text: 'Déconnexion', style: 'destructive', onPress: async () => {
+          await stopVoiceAlert();
+          await supabase.auth.signOut();
+        }
+      },
+    ]);
 
-  // ============================================================
-  // DÉCONNEXION
-  // ============================================================
-  const handleLogout = async () => {
-    Alert.alert(
-      'Déconnexion',
-      'Voulez-vous vraiment vous déconnecter ?',
-      [
-        { text: 'Annuler', style: 'cancel' },
-        {
-          text: 'Déconnexion',
-          style: 'destructive',
-          onPress: async () => {
-            await stopVoiceAlert();
-            await supabase.auth.signOut();
-          },
-        },
-      ]
-    );
-  };
-
-  // ============================================================
-  // RENDU
-  // ============================================================
+  // ──────────────────────────────────────────────────────────
+  // RENDU — Chargement
+  // ──────────────────────────────────────────────────────────
   if (isLoading) {
     return (
-      <View style={GlobalStyles.loadingContainer}>
-        <ActivityIndicator size="large" color={COLORS.primary} />
-        <Text style={GlobalStyles.loadingText}>Chargement...</Text>
+      <View style={G.loadingWrap}>
+        <Text style={{ fontSize: 60 }}>💊</Text>
+        <ActivityIndicator size="large" color={COLORS.coral} style={{ marginTop: 8 }} />
+        <Text style={G.loadingTxt}>Chargement…</Text>
       </View>
     );
   }
 
-  // === MODE ALERTE ===
+  // ================================================================
+  // MODE ALERTE
+  // ================================================================
   if (isAlertMode && activeMedication) {
     return (
-      <View style={styles.alertScreen}>
-        <ScrollView contentContainerStyle={styles.alertContent}>
+      <LinearGradient
+        colors={[COLORS.alertDark, COLORS.alertMid, COLORS.alertLight]}
+        style={styles.alertRoot}
+        start={{ x: 0.1, y: 0 }}
+        end={{ x: 0.9, y: 1 }}
+      >
+        {/* Cercles décoratifs */}
+        <View style={styles.alertCircle1} />
+        <View style={styles.alertCircle2} />
+        <View style={styles.alertCircle3} />
 
-          {/* Icône alerte */}
-          <Text style={styles.alertEmoji}>🚨</Text>
+        <ScrollView
+          contentContainerStyle={styles.alertScroll}
+          showsVerticalScrollIndicator={false}
+        >
 
-          {/* Titre alerte */}
-          <Text style={styles.alertTitle}>C'EST L'HEURE !</Text>
-
-          {/* Photo du médicament */}
-          {activeMedication.photo_url ? (
-            <Image
-              source={{ uri: activeMedication.photo_url }}
-              style={styles.medicationPhoto}
-              accessible
-              accessibilityLabel={`Photo du médicament ${activeMedication.name}`}
-            />
-          ) : (
-            <View style={styles.photoPlaceholderAlert}>
-              <Text style={styles.photoPlaceholderEmoji}>💊</Text>
+          {/* Header : badge pulse + heure */}
+          <View style={styles.alertHeader}>
+            <View style={styles.pulseBadge}>
+              <Animated.View style={[styles.pulseDot, {
+                opacity: pulseAnim.interpolate({ inputRange: [1, 1.05], outputRange: [1, 0.4] }),
+              }]} />
+              <Text style={styles.pulseTxt}>Rappel actif</Text>
             </View>
-          )}
+            <Text style={styles.alertClock}>{fmt(currentTime)}</Text>
+          </View>
 
-          {/* Nom du médicament */}
-          <Text style={styles.medicationName}>{activeMedication.name}</Text>
+          {/* ── Photo médicament avec anneau pulsant ── */}
+          <Animated.View style={[styles.ringWrap, { transform: [{ scale: ringAnim }] }]}>
+            <View style={styles.ringOuter}>
+              {activeMedication.photo_url ? (
+                <Image
+                  source={{ uri: activeMedication.photo_url }}
+                  style={styles.alertPhoto}
+                  accessible
+                  accessibilityLabel={`Photo du médicament ${activeMedication.name}`}
+                />
+              ) : (
+                <View style={styles.alertPhotoPlaceholder}>
+                  <Text style={{ fontSize: 72 }}>💊</Text>
+                </View>
+              )}
+            </View>
+          </Animated.View>
 
-          {/* Dosage */}
-          {activeMedication.dosage && (
-            <Text style={styles.medicationDosage}>{activeMedication.dosage}</Text>
-          )}
+          {/* ── Textes ── */}
+          <Text style={styles.alertLabel}>C'est l'heure de prendre</Text>
+          <Text style={styles.alertMedName}>{activeMedication.name}</Text>
+          {activeMedication.dosage ? (
+            <Text style={styles.alertMedDosage}>{activeMedication.dosage}</Text>
+          ) : null}
 
-          {/* BOUTON DE VALIDATION — GÉANT */}
-          <Animated.View style={{ transform: [{ scale: pulseAnim }], width: '100%' }}>
-            <TouchableOpacity
-              style={styles.validationButton}
-              onPress={handleMedicationTaken}
-              activeOpacity={0.85}
-              accessible
-              accessibilityRole="button"
-              accessibilityLabel="J'ai pris mon médicament, appuyez pour confirmer"
-            >
-              <Text style={styles.validationButtonEmoji}>✅</Text>
-              <Text style={styles.validationButtonText}>J'AI PRIS MON{'\n'}MÉDICAMENT</Text>
-            </TouchableOpacity>
+          {/* ── Bouton validation GÉANT ── */}
+          <Animated.View style={[styles.btnValidationOuter, { transform: [{ scale: pulseAnim }] }]}>
+            <Animated.View style={{ transform: [{ scale: btnScale }] }}>
+              <TouchableOpacity
+                style={G.btnValidation}
+                onPress={handleTaken}
+                disabled={isValidating}
+                activeOpacity={0.92}
+                accessible
+                accessibilityRole="button"
+                accessibilityLabel="Confirmer la prise du médicament"
+              >
+                {isValidating ? (
+                  <ActivityIndicator size="large" color={COLORS.sage} />
+                ) : (
+                  <>
+                    <Text style={{ fontSize: 56, marginBottom: 10 }}>✅</Text>
+                    <Text style={G.btnValidationTxt}>
+                      {"J'AI PRIS MON\nMÉDICAMENT"}
+                    </Text>
+                    <Text style={G.btnValidationSub}>Appuyez pour confirmer</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </Animated.View>
           </Animated.View>
 
         </ScrollView>
-      </View>
+      </LinearGradient>
     );
   }
 
-  // === MODE CALME ===
+  // ================================================================
+  // MODE CALME
+  // ================================================================
   return (
-    <View style={styles.calmScreen}>
-      <ScrollView contentContainerStyle={styles.calmContent}>
+    <View style={styles.calmRoot}>
+      {/* Arc décoratif en haut */}
+      <View style={styles.calmArc} />
 
-        {/* Header avec heure et bouton admin */}
-        <View style={styles.calmHeader}>
-          <Text style={styles.currentTime}>{formatTime(currentTime)}</Text>
+      <ScrollView
+        contentContainerStyle={styles.calmScroll}
+        showsVerticalScrollIndicator={false}
+      >
+
+        {/* ── Barre statut : heure + bouton admin ── */}
+        <View style={styles.statusRow}>
+          <Text style={styles.clockBig}>{fmt(currentTime)}</Text>
           <TouchableOpacity
-            style={styles.adminButton}
+            style={G.btnIcon}
             onPress={() => navigation.navigate('Admin')}
             accessible
             accessibilityRole="button"
             accessibilityLabel="Accéder à la configuration"
           >
-            <Text style={styles.adminButtonText}>⚙️</Text>
+            <Text style={{ fontSize: 24 }}>⚙️</Text>
           </TouchableOpacity>
         </View>
 
-        {/* Message de réassurance */}
-        <View style={styles.calmMessageContainer}>
-          <Text style={styles.calmEmoji}>😊</Text>
-          <Text style={styles.calmMessage}>Tout va bien Maman</Text>
-          <Text style={styles.calmSubMessage}>Vous n'avez rien à faire pour le moment</Text>
+        {/* ── Salutation ── */}
+        <View style={styles.greetWrap}>
+          <Text style={styles.greetSmall}>Bonjour 👋</Text>
+          <Text style={styles.greetBig}>
+            {'Bonne\n'}
+            <Text style={styles.greetAccent}>journée</Text>
+          </Text>
         </View>
 
-        {/* Prochain rappel */}
-        <View style={styles.nextReminderCard}>
-          <Text style={styles.nextReminderLabel}>⏰ Prochain rappel</Text>
-          <Text style={styles.nextReminderText}>{formatNextReminder(nextReminder)}</Text>
+        {/* ── Hero card sauge — état calme ── */}
+        <View style={[G.heroCard, styles.heroCardExtra]}>
+          <View style={styles.heroBubble} />
+
+          <Text style={{ fontSize: 54, marginBottom: 14 }}>😊</Text>
+          <Text style={styles.heroLabel}>État actuel</Text>
+          <Text style={styles.heroMsg}>{'Tout va bien,\nvous êtes en règle'}</Text>
+          <Text style={styles.heroSub}>Aucun médicament en attente</Text>
+
+          {/* Chip prochain rappel */}
+          <View style={G.chip}>
+            <Text style={G.chipTxt}>
+              {nextReminder ? `⏰  ${fmtNext(nextReminder)}` : '➕  Ajoutez un médicament'}
+            </Text>
+          </View>
         </View>
 
-        {/* Liste des médicaments (aperçu) */}
+        {/* ── Liste médicaments ── */}
         {medications.length > 0 && (
-          <View style={styles.medicationsList}>
-            <Text style={styles.sectionTitle}>Vos médicaments :</Text>
+          <>
+            <Text style={G.sectionLabel}>Vos médicaments du jour</Text>
             {medications.map((med) => (
-              <View key={med.id} style={styles.medicationItem}>
-                <Text style={styles.medicationItemName}>💊 {med.name}</Text>
-                <Text style={styles.medicationItemTime}>{med.reminder_time.slice(0, 5)}</Text>
+              <View key={med.id} style={G.medCard}>
+                <View style={G.medIconBox}>
+                  <Text style={{ fontSize: 26 }}>💊</Text>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.medName}>{med.name}</Text>
+                  <Text style={styles.medDosage}>{med.dosage}</Text>
+                </View>
+                <View style={G.amberBadge}>
+                  <Text style={G.amberBadgeTxt}>{med.reminder_time.slice(0, 5)}</Text>
+                </View>
               </View>
             ))}
-          </View>
+          </>
         )}
 
-        {/* Bouton déconnexion discret */}
-        <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
-          <Text style={styles.logoutText}>Déconnexion</Text>
+        {/* ── Bouton ajouter médicament ── */}
+        <TouchableOpacity
+          style={styles.addBtn}
+          onPress={() => navigation.navigate('Admin')}
+          accessible
+          accessibilityRole="button"
+          accessibilityLabel="Ajouter un médicament"
+        >
+          <Text style={styles.addBtnTxt}>＋  Ajouter un médicament</Text>
+        </TouchableOpacity>
+
+        {/* ── Déconnexion ── */}
+        <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
+          <Text style={styles.logoutTxt}>Déconnexion</Text>
         </TouchableOpacity>
 
       </ScrollView>
     </View>
   );
-};
+}
 
-// ============================================================
-// STYLES LOCAUX
-// ============================================================
+// ================================================================
+// STYLES
+// ================================================================
 const styles = StyleSheet.create({
-  // --- MODE ALERTE ---
-  alertScreen: {
-    flex: 1,
-    backgroundColor: COLORS.alert,
+
+  // ── MODE ALERTE ────────────────────────────────────────────
+  alertRoot: { flex: 1 },
+
+  alertCircle1: {
+    position: 'absolute',
+    width: 440, height: 440, borderRadius: 220,
+    backgroundColor: 'rgba(255,255,255,0.07)',
+    top: -170, right: -170,
+  },
+  alertCircle2: {
+    position: 'absolute',
+    width: 280, height: 280, borderRadius: 140,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    bottom: 60, left: -110,
+  },
+  alertCircle3: {
+    position: 'absolute',
+    width: 130, height: 130, borderRadius: 65,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    top: 200, left: 30,
   },
 
-  alertContent: {
+  alertScroll: {
     flexGrow: 1,
-    paddingHorizontal: SIZES.padding.screen,
-    paddingTop: Platform.OS === 'ios' ? 70 : 50,
-    paddingBottom: 40,
+    paddingHorizontal: SIZES.padH,
+    paddingTop: SIZES.padTop,
+    paddingBottom: 52,
     alignItems: 'center',
   },
 
-  alertEmoji: {
-    fontSize: 60,
-    marginBottom: SIZES.spacing.sm,
-  },
-
-  alertTitle: {
-    fontSize: TYPOGRAPHY.xl,
-    fontWeight: TYPOGRAPHY.black,
-    color: COLORS.textLight,
-    textAlign: 'center',
-    letterSpacing: 2,
-    marginBottom: SIZES.spacing.md,
-  },
-
-  medicationPhoto: {
-    width: 220,
-    height: 220,
-    borderRadius: 20,
-    borderWidth: 5,
-    borderColor: COLORS.textLight,
-    marginVertical: SIZES.spacing.md,
-  },
-
-  photoPlaceholderAlert: {
-    width: 220,
-    height: 220,
-    borderRadius: 20,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginVertical: SIZES.spacing.md,
-  },
-
-  photoPlaceholderEmoji: {
-    fontSize: 100,
-  },
-
-  medicationName: {
-    fontSize: TYPOGRAPHY.xl,
-    fontWeight: TYPOGRAPHY.black,
-    color: COLORS.textLight,
-    textAlign: 'center',
-    marginBottom: SIZES.spacing.xs,
-    letterSpacing: 1,
-  },
-
-  medicationDosage: {
-    fontSize: TYPOGRAPHY.md,
-    color: 'rgba(255,255,255,0.9)',
-    textAlign: 'center',
-    marginBottom: SIZES.spacing.lg,
-  },
-
-  // Bouton validation géant
-  validationButton: {
-    backgroundColor: COLORS.success,
-    borderRadius: 24,
-    paddingVertical: SIZES.spacing.lg,
-    paddingHorizontal: SIZES.spacing.md,
+  alertHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
     width: '100%',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.4,
-    shadowRadius: 10,
-    elevation: 12,
-    borderWidth: 4,
-    borderColor: 'rgba(255,255,255,0.3)',
+    marginBottom: 40,
   },
 
-  validationButtonEmoji: {
-    fontSize: 48,
-    marginBottom: SIZES.spacing.xs,
-  },
-
-  validationButtonText: {
-    fontSize: TYPOGRAPHY.lg,
-    fontWeight: TYPOGRAPHY.black,
-    color: COLORS.textLight,
-    textAlign: 'center',
-    letterSpacing: 1,
-    lineHeight: TYPOGRAPHY.lg * 1.3,
-  },
-
-  // --- MODE CALME ---
-  calmScreen: {
-    flex: 1,
-    backgroundColor: COLORS.calm,
-  },
-
-  calmContent: {
-    flexGrow: 1,
-    paddingHorizontal: SIZES.padding.screen,
-    paddingTop: Platform.OS === 'ios' ? 60 : 40,
-    paddingBottom: 40,
-  },
-
-  calmHeader: {
+  pulseBadge: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: SIZES.spacing.lg,
+    gap: 9,
+    backgroundColor: 'rgba(255,255,255,0.20)',
+    borderRadius: RADIUS.full,
+    paddingVertical: 9,
+    paddingHorizontal: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.32)',
   },
-
-  currentTime: {
-    fontSize: TYPOGRAPHY.xxl,
-    fontWeight: TYPOGRAPHY.black,
-    color: COLORS.primary,
-  },
-
-  adminButton: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
+  pulseDot: {
+    width: 11, height: 11,
+    borderRadius: 6,
     backgroundColor: COLORS.white,
+  },
+  pulseTxt: {
+    fontSize: 15,
+    fontWeight: FONTS.heavy,
+    color: 'rgba(255,255,255,0.92)',
+  },
+  alertClock: {
+    fontSize: FONTS.md,
+    fontWeight: FONTS.black,
+    color: 'rgba(255,255,255,0.92)',
+  },
+
+  // Anneau + photo
+  ringWrap: { marginBottom: 32 },
+  ringOuter: {
+    width: 200, height: 200,
+    borderRadius: 100,
+    backgroundColor: 'rgba(255,255,255,0.16)',
+    borderWidth: 3,
+    borderColor: 'rgba(255,255,255,0.32)',
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    ...SHADOWS.lg,
   },
-
-  adminButtonText: {
-    fontSize: 28,
+  alertPhoto: {
+    width: 162, height: 162,
+    borderRadius: 81,
   },
-
-  calmMessageContainer: {
-    backgroundColor: COLORS.white,
-    borderRadius: 24,
-    padding: SIZES.padding.card,
+  alertPhotoPlaceholder: {
+    width: 162, height: 162,
+    borderRadius: 81,
+    backgroundColor: COLORS.warmWhite,
+    justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: SIZES.spacing.md,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 3,
   },
 
-  calmEmoji: {
-    fontSize: 72,
-    marginBottom: SIZES.spacing.sm,
-  },
-
-  calmMessage: {
-    fontSize: TYPOGRAPHY.lg,
-    fontWeight: TYPOGRAPHY.black,
-    color: COLORS.primary,
-    textAlign: 'center',
-    marginBottom: SIZES.spacing.xs,
-  },
-
-  calmSubMessage: {
-    fontSize: TYPOGRAPHY.xs,
-    color: COLORS.textMuted,
+  // Textes alerte
+  alertLabel: {
+    fontSize: 14,
+    fontWeight: FONTS.black,
+    color: 'rgba(255,255,255,0.72)',
+    textTransform: 'uppercase',
+    letterSpacing: 2.5,
+    marginBottom: 10,
     textAlign: 'center',
   },
-
-  nextReminderCard: {
-    backgroundColor: COLORS.primaryLight,
-    borderRadius: 18,
-    padding: SIZES.padding.card,
-    borderLeftWidth: 6,
-    borderLeftColor: COLORS.primary,
-    marginBottom: SIZES.spacing.md,
+  alertMedName: {
+    fontSize: FONTS.xl,
+    fontWeight: FONTS.black,
+    color: COLORS.white,
+    textAlign: 'center',
+    letterSpacing: -2,
+    lineHeight: FONTS.xl,
+    marginBottom: 10,
+  },
+  alertMedDosage: {
+    fontSize: FONTS.md,
+    fontWeight: FONTS.bold,
+    color: 'rgba(255,255,255,0.82)',
+    textAlign: 'center',
+    marginBottom: 44,
   },
 
-  nextReminderLabel: {
-    fontSize: TYPOGRAPHY.xs,
-    fontWeight: TYPOGRAPHY.bold,
-    color: COLORS.primary,
-    marginBottom: SIZES.spacing.xs,
+  btnValidationOuter: { width: '100%' },
+
+  // ── MODE CALME ─────────────────────────────────────────────
+  calmRoot: {
+    flex: 1,
+    backgroundColor: COLORS.cream,
+  },
+  calmArc: {
+    position: 'absolute',
+    top: -90, left: -70, right: -70,
+    height: 340,
+    borderRadius: 999,
+    backgroundColor: COLORS.coralLight,
+    opacity: 0.60,
+  },
+  calmScroll: {
+    flexGrow: 1,
+    paddingHorizontal: SIZES.padH,
+    paddingTop: SIZES.padTop,
+    paddingBottom: 52,
   },
 
-  nextReminderText: {
-    fontSize: TYPOGRAPHY.sm,
-    fontWeight: TYPOGRAPHY.medium,
-    color: COLORS.textDark,
-  },
-
-  medicationsList: {
-    marginBottom: SIZES.spacing.md,
-  },
-
-  sectionTitle: {
-    fontSize: TYPOGRAPHY.sm,
-    fontWeight: TYPOGRAPHY.bold,
-    color: COLORS.textDark,
-    marginBottom: SIZES.spacing.sm,
-  },
-
-  medicationItem: {
-    backgroundColor: COLORS.white,
-    borderRadius: 14,
-    padding: SIZES.spacing.md,
+  // Statut
+  statusRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: SIZES.spacing.xs,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.06,
-    shadowRadius: 4,
-    elevation: 2,
+    marginBottom: 26,
   },
-
-  medicationItemName: {
-    fontSize: TYPOGRAPHY.sm,
-    fontWeight: TYPOGRAPHY.medium,
+  clockBig: {
+    fontSize: FONTS.xxl,
+    fontWeight: FONTS.black,
     color: COLORS.textDark,
+    letterSpacing: -3,
   },
 
-  medicationItemTime: {
-    fontSize: TYPOGRAPHY.sm,
-    fontWeight: TYPOGRAPHY.bold,
-    color: COLORS.primary,
+  // Salutation
+  greetWrap: { marginBottom: 28 },
+  greetSmall: {
+    fontSize: 15,
+    fontWeight: FONTS.heavy,
+    color: COLORS.textSoft,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    marginBottom: 4,
+  },
+  greetBig: {
+    fontSize: FONTS.lg,
+    fontWeight: FONTS.black,
+    color: COLORS.textDark,
+    letterSpacing: -1.5,
+    lineHeight: FONTS.lh(FONTS.lg),
+  },
+  greetAccent: {
+    color: COLORS.coral,
+    fontStyle: 'italic',
   },
 
-  logoutButton: {
-    marginTop: SIZES.spacing.lg,
-    padding: SIZES.spacing.md,
+  // Hero card
+  heroCardExtra: { marginBottom: 32 },
+  heroBubble: {
+    position: 'absolute',
+    width: 210, height: 210, borderRadius: 105,
+    backgroundColor: 'rgba(255,255,255,0.09)',
+    top: -65, right: -65,
+  },
+  heroLabel: {
+    fontSize: 12,
+    fontWeight: FONTS.black,
+    color: 'rgba(255,255,255,0.65)',
+    textTransform: 'uppercase',
+    letterSpacing: 2,
+    marginBottom: 8,
+  },
+  heroMsg: {
+    fontSize: FONTS.md,
+    fontWeight: FONTS.black,
+    color: COLORS.white,
+    lineHeight: FONTS.lh(FONTS.md),
+    letterSpacing: -0.5,
+    marginBottom: 6,
+  },
+  heroSub: {
+    fontSize: FONTS.xs - 2,
+    fontWeight: FONTS.regular,
+    color: 'rgba(255,255,255,0.75)',
+    marginBottom: 22,
+  },
+
+  // Médicaments
+  medName: {
+    fontSize: FONTS.sm,
+    fontWeight: FONTS.heavy,
+    color: COLORS.textDark,
+    marginBottom: 4,
+  },
+  medDosage: {
+    fontSize: FONTS.xs - 2,
+    fontWeight: FONTS.regular,
+    color: COLORS.textSoft,
+  },
+
+  // Bouton ajouter
+  addBtn: {
+    height: 66,
+    borderRadius: RADIUS.lg,
+    borderWidth: 2.5,
+    borderStyle: 'dashed',
+    borderColor: 'rgba(92,79,68,0.20)',
+    backgroundColor: COLORS.creamDark,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 14,
+  },
+  addBtnTxt: {
+    fontSize: FONTS.xs,
+    fontWeight: FONTS.heavy,
+    color: COLORS.textSoft,
+  },
+
+  // Déconnexion
+  logoutBtn: {
+    paddingVertical: 16,
     alignItems: 'center',
   },
-
-  logoutText: {
-    fontSize: TYPOGRAPHY.xs,
-    color: COLORS.textMuted,
+  logoutTxt: {
+    fontSize: FONTS.xs - 2,
+    fontWeight: FONTS.regular,
+    color: COLORS.textSoft,
     textDecorationLine: 'underline',
   },
 });
-
-export default DashboardScreen;

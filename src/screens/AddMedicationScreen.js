@@ -1,10 +1,10 @@
-// ============================================================
-// AddMedicationScreen.js
-// Écran d'administration — Ajout/gestion des médicaments
-// Accessible aux aidants/familles (Mode Admin)
-// ============================================================
+// ================================================================
+// AddMedicationScreen.js — Design "Santé Douce"
+// Écran admin : ajout d'un médicament
+// Photo · Nom · Dosage · Fréquence · Jours · Heure · Enregistrer
+// ================================================================
 
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   View,
   Text,
@@ -16,16 +16,15 @@ import {
   Alert,
   ActivityIndicator,
   Platform,
-  Switch,
+  Animated,
 } from 'react-native';
-import * as ImagePicker from 'expo-image-picker';
-import DateTimePicker from '@react-native-community/datetimepicker';
-import { addMedication, uploadMedicationPhoto, scheduleMedicationNotification } from '../services/SupabaseClient';
-import { scheduleMedicationNotification as scheduleNotif } from '../services/NotificationManager';
-import { COLORS, TYPOGRAPHY, SIZES, GlobalStyles } from '../styles/styles';
+import * as ImagePicker   from 'expo-image-picker';
+import DateTimePicker     from '@react-native-community/datetimepicker';
+import { addMedication, uploadMedicationPhoto } from '../services/SupabaseClient';
+import { scheduleMedicationNotification }        from '../services/NotificationManager';
+import { COLORS, FONTS, SIZES, RADIUS, SHADOWS, G } from '../styles/styles';
 
-// Jours de la semaine pour la sélection hebdomadaire
-const DAYS_OF_WEEK = [
+const DAYS = [
   { label: 'Dim', value: 0 },
   { label: 'Lun', value: 1 },
   { label: 'Mar', value: 2 },
@@ -35,533 +34,566 @@ const DAYS_OF_WEEK = [
   { label: 'Sam', value: 6 },
 ];
 
-const AddMedicationScreen = ({ navigation }) => {
-  // ---- ÉTAT DU FORMULAIRE ----
-  const [name, setName] = useState('');
-  const [dosage, setDosage] = useState('');
-  const [frequency, setFrequency] = useState('daily'); // 'daily' ou 'weekly'
+// ================================================================
+export default function AddMedicationScreen({ navigation }) {
+
+  // ── État formulaire ────────────────────────────────────────
+  const [name,         setName]         = useState('');
+  const [dosage,       setDosage]       = useState('');
+  const [frequency,    setFrequency]    = useState('daily');
   const [selectedDays, setSelectedDays] = useState([]);
   const [reminderTime, setReminderTime] = useState(new Date());
-  const [showTimePicker, setShowTimePicker] = useState(false);
-  const [photoUri, setPhotoUri] = useState(null);
+  const [showPicker,   setShowPicker]   = useState(false);
+  const [photoUri,     setPhotoUri]     = useState(null);
+  const [isLoading,    setIsLoading]    = useState(false);
+  const [errors,       setErrors]       = useState({});
+  const [focusField,   setFocusField]   = useState(null);
 
-  // ---- ÉTAT DU FORMULAIRE (erreurs, loading) ----
-  const [isLoading, setIsLoading] = useState(false);
-  const [errors, setErrors] = useState({});
+  // Animation bouton submit
+  const btnScale = useRef(new Animated.Value(1)).current;
+  const onPressIn  = () => Animated.spring(btnScale, { toValue: 0.97, useNativeDriver: true, speed: 50 }).start();
+  const onPressOut = () => Animated.spring(btnScale, { toValue: 1.00, useNativeDriver: true, speed: 50 }).start();
 
-  // ============================================================
-  // GESTION DES PHOTOS
-  // ============================================================
-
-  /**
-   * Demande les permissions puis ouvre la caméra
-   */
+  // ──────────────────────────────────────────────────────────
+  // PHOTO
+  // ──────────────────────────────────────────────────────────
   const handleTakePhoto = async () => {
-    // Demande de permission caméra
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
     if (status !== 'granted') {
-      Alert.alert(
-        'Permission refusée',
-        'Vous devez autoriser l\'accès à la caméra pour photographier vos médicaments.',
-        [{ text: 'OK' }]
-      );
+      Alert.alert('Permission refusée', "Autorisez l'accès à la caméra dans les Réglages.");
       return;
     }
-
-    // Ouverture de la caméra
     const result = await ImagePicker.launchCameraAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
-      aspect: [1, 1],      // Format carré pour la boîte de médicaments
-      quality: 0.8,        // Qualité 80% (bon compromis taille/qualité)
+      aspect: [1, 1],
+      quality: 0.8,
     });
-
-    if (!result.canceled && result.assets.length > 0) {
+    if (!result.canceled && result.assets.length > 0)
       setPhotoUri(result.assets[0].uri);
-    }
   };
 
-  /**
-   * Ouvre la galerie photo
-   */
-  const handlePickFromGallery = async () => {
+  const handlePickGallery = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
-      Alert.alert('Permission refusée', 'Autorisez l\'accès à vos photos.');
+      Alert.alert('Permission refusée', "Autorisez l'accès à vos photos dans les Réglages.");
       return;
     }
-
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
       aspect: [1, 1],
       quality: 0.8,
     });
-
-    if (!result.canceled && result.assets.length > 0) {
+    if (!result.canceled && result.assets.length > 0)
       setPhotoUri(result.assets[0].uri);
-    }
   };
 
-  // ============================================================
-  // GESTION DES JOURS (fréquence hebdomadaire)
-  // ============================================================
-  const toggleDay = (dayValue) => {
+  // ──────────────────────────────────────────────────────────
+  // JOURS
+  // ──────────────────────────────────────────────────────────
+  const toggleDay = (val) =>
     setSelectedDays((prev) =>
-      prev.includes(dayValue)
-        ? prev.filter((d) => d !== dayValue)
-        : [...prev, dayValue]
+      prev.includes(val) ? prev.filter((d) => d !== val) : [...prev, val]
     );
+
+  // ──────────────────────────────────────────────────────────
+  // VALIDATION FORMULAIRE
+  // ──────────────────────────────────────────────────────────
+  const validate = () => {
+    const e = {};
+    if (!name.trim())   e.name   = 'Le nom du médicament est obligatoire.';
+    if (!dosage.trim()) e.dosage = 'Le dosage est obligatoire.';
+    if (frequency === 'weekly' && selectedDays.length === 0)
+      e.days = 'Sélectionnez au moins un jour de la semaine.';
+    setErrors(e);
+    return Object.keys(e).length === 0;
   };
 
-  // ============================================================
-  // VALIDATION DU FORMULAIRE
-  // ============================================================
-  const validateForm = () => {
-    const newErrors = {};
-
-    if (!name.trim()) {
-      newErrors.name = 'Le nom du médicament est obligatoire.';
-    }
-
-    if (!dosage.trim()) {
-      newErrors.dosage = 'Le dosage est obligatoire.';
-    }
-
-    if (frequency === 'weekly' && selectedDays.length === 0) {
-      newErrors.days = 'Sélectionnez au moins un jour de la semaine.';
-    }
-
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
-  };
-
-  // ============================================================
-  // SOUMISSION DU FORMULAIRE
-  // ============================================================
+  // ──────────────────────────────────────────────────────────
+  // SOUMISSION
+  // ──────────────────────────────────────────────────────────
   const handleSubmit = async () => {
-    if (!validateForm()) return;
-
+    if (!validate()) return;
     setIsLoading(true);
-
     try {
-      // 1. Upload de la photo si présente
+      // 1. Upload photo si présente
       let photoUrl = null;
       if (photoUri) {
         const fileName = `${name.replace(/\s+/g, '_')}_${Date.now()}.jpg`;
         photoUrl = await uploadMedicationPhoto(photoUri, fileName);
-        console.log('[AddMedication] Photo uploadée :', photoUrl);
       }
 
-      // 2. Formatage de l'heure (HH:MM:00)
-      const timeStr = `${String(reminderTime.getHours()).padStart(2, '0')}:${String(reminderTime.getMinutes()).padStart(2, '0')}:00`;
+      // 2. Heure formatée HH:MM:00
+      const hh = String(reminderTime.getHours()).padStart(2, '0');
+      const mm = String(reminderTime.getMinutes()).padStart(2, '0');
+      const timeStr = `${hh}:${mm}:00`;
 
-      // 3. Création du médicament dans Supabase
+      // 3. Création dans Supabase
       const newMed = await addMedication({
-        name: name.trim(),
-        dosage: dosage.trim(),
+        name:          name.trim(),
+        dosage:        dosage.trim(),
         frequency,
         specific_days: frequency === 'weekly' ? selectedDays : null,
         reminder_time: timeStr,
-        photo_url: photoUrl,
+        photo_url:     photoUrl,
       });
 
-      console.log('[AddMedication] Médicament créé :', newMed.id);
+      // 4. Notification locale
+      await scheduleMedicationNotification(newMed);
 
-      // 4. Programmation de la notification locale
-      await scheduleNotif(newMed);
-
-      // 5. Succès — retour au dashboard
       Alert.alert(
-        '✅ Médicament ajouté',
-        `"${name}" a été configuré avec un rappel à ${timeStr.slice(0, 5)}.`,
+        '✅ Médicament ajouté !',
+        `"${name}" — rappel configuré à ${hh}:${mm}.`,
         [{ text: 'Parfait !', onPress: () => navigation.goBack() }]
       );
-
     } catch (err) {
-      console.error('[AddMedication] Erreur :', err.message);
-      Alert.alert(
-        'Erreur',
-        'Impossible d\'enregistrer le médicament. Vérifiez votre connexion internet.',
-        [{ text: 'OK' }]
-      );
+      console.error('[AddMedication]', err.message);
+      Alert.alert('Erreur', "Impossible d'enregistrer. Vérifiez votre connexion internet.");
     } finally {
       setIsLoading(false);
     }
   };
 
-  // ============================================================
-  // RENDU
-  // ============================================================
+  // ──────────────────────────────────────────────────────────
+  // HELPERS
+  // ──────────────────────────────────────────────────────────
+  const hh = String(reminderTime.getHours()).padStart(2, '0');
+  const mm = String(reminderTime.getMinutes()).padStart(2, '0');
+
+  // ================================================================
   return (
-    <ScrollView
-      style={styles.container}
-      contentContainerStyle={styles.content}
-      keyboardShouldPersistTaps="handled"
-    >
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-          <Text style={styles.backButtonText}>← Retour</Text>
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Ajouter un médicament</Text>
-      </View>
+    <View style={styles.root}>
+      <ScrollView
+        contentContainerStyle={styles.scroll}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
 
-      {/* ---- NOM ---- */}
-      <View style={GlobalStyles.inputContainer}>
-        <Text style={GlobalStyles.inputLabel}>💊 Nom du médicament *</Text>
-        <TextInput
-          style={[GlobalStyles.input, errors.name && styles.inputError]}
-          value={name}
-          onChangeText={(t) => { setName(t); setErrors((e) => ({ ...e, name: null })); }}
-          placeholder="Ex : Doliprane, Metformine..."
-          placeholderTextColor={COLORS.border}
-          returnKeyType="next"
-        />
-        {errors.name && <Text style={styles.errorMsg}>{errors.name}</Text>}
-      </View>
-
-      {/* ---- DOSAGE ---- */}
-      <View style={GlobalStyles.inputContainer}>
-        <Text style={GlobalStyles.inputLabel}>📏 Dosage *</Text>
-        <TextInput
-          style={[GlobalStyles.input, errors.dosage && styles.inputError]}
-          value={dosage}
-          onChangeText={(t) => { setDosage(t); setErrors((e) => ({ ...e, dosage: null })); }}
-          placeholder="Ex : 500mg, 2 comprimés, 1 sachet..."
-          placeholderTextColor={COLORS.border}
-          returnKeyType="next"
-        />
-        {errors.dosage && <Text style={styles.errorMsg}>{errors.dosage}</Text>}
-      </View>
-
-      {/* ---- FRÉQUENCE ---- */}
-      <View style={GlobalStyles.inputContainer}>
-        <Text style={GlobalStyles.inputLabel}>🔁 Fréquence *</Text>
-        <View style={styles.frequencyRow}>
+        {/* ── HEADER ──────────────────────────────────────── */}
+        <View style={styles.header}>
           <TouchableOpacity
-            style={[styles.freqButton, frequency === 'daily' && styles.freqButtonActive]}
-            onPress={() => setFrequency('daily')}
+            style={G.btnIcon}
+            onPress={() => navigation.goBack()}
+            accessible
+            accessibilityRole="button"
+            accessibilityLabel="Retour"
           >
-            <Text style={[styles.freqButtonText, frequency === 'daily' && styles.freqButtonTextActive]}>
-              Quotidien
-            </Text>
+            <Text style={{ fontSize: 22 }}>←</Text>
           </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.freqButton, frequency === 'weekly' && styles.freqButtonActive]}
-            onPress={() => setFrequency('weekly')}
-          >
-            <Text style={[styles.freqButtonText, frequency === 'weekly' && styles.freqButtonTextActive]}>
-              Hebdomadaire
-            </Text>
-          </TouchableOpacity>
+          <View style={{ flex: 1, marginLeft: 16 }}>
+            <Text style={styles.pageTitle}>Nouveau médicament</Text>
+            <Text style={styles.pageSub}>Configurez le rappel</Text>
+          </View>
         </View>
-      </View>
 
-      {/* ---- JOURS (si hebdomadaire) ---- */}
-      {frequency === 'weekly' && (
-        <View style={GlobalStyles.inputContainer}>
-          <Text style={GlobalStyles.inputLabel}>📅 Jours de la semaine *</Text>
-          <View style={styles.daysRow}>
-            {DAYS_OF_WEEK.map((day) => (
+        {/* ── PHOTO ───────────────────────────────────────── */}
+        {photoUri ? (
+          // Aperçu photo avec bouton changer
+          <View style={styles.photoPreviewWrap}>
+            <Image source={{ uri: photoUri }} style={styles.photoPreview} />
+            <TouchableOpacity
+              style={styles.changePhotoBtn}
+              onPress={handleTakePhoto}
+              accessible
+              accessibilityRole="button"
+            >
+              <Text style={styles.changePhotoBtnTxt}>📷  Changer la photo</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          // Boutons caméra / galerie
+          <View style={styles.photoPickerRow}>
+            <TouchableOpacity
+              style={styles.photoPicker}
+              onPress={handleTakePhoto}
+              accessible
+              accessibilityRole="button"
+              accessibilityLabel="Prendre une photo"
+            >
+              <Text style={styles.photoPickerEmoji}>📷</Text>
+              <Text style={styles.photoPickerTxt}>Prendre une photo</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.photoPicker}
+              onPress={handlePickGallery}
+              accessible
+              accessibilityRole="button"
+              accessibilityLabel="Choisir depuis la galerie"
+            >
+              <Text style={styles.photoPickerEmoji}>🖼️</Text>
+              <Text style={styles.photoPickerTxt}>Depuis la galerie</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* ── NOM ─────────────────────────────────────────── */}
+        <View style={G.inputWrap}>
+          <Text style={G.inputLabel}>💊  Nom du médicament *</Text>
+          <TextInput
+            style={[
+              G.input,
+              focusField === 'name'  && G.inputFocus,
+              errors.name            && G.inputError,
+            ]}
+            value={name}
+            onChangeText={(t) => { setName(t); setErrors((e) => ({ ...e, name: null })); }}
+            placeholder="Ex : Doliprane, Metformine…"
+            placeholderTextColor={COLORS.textSoft}
+            returnKeyType="next"
+            onFocus={() => setFocusField('name')}
+            onBlur={()  => setFocusField(null)}
+            accessible
+            accessibilityLabel="Nom du médicament"
+          />
+          {errors.name && <Text style={styles.errTxt}>⚠  {errors.name}</Text>}
+        </View>
+
+        {/* ── DOSAGE ──────────────────────────────────────── */}
+        <View style={G.inputWrap}>
+          <Text style={G.inputLabel}>📏  Dosage *</Text>
+          <TextInput
+            style={[
+              G.input,
+              focusField === 'dosage' && G.inputFocus,
+              errors.dosage           && G.inputError,
+            ]}
+            value={dosage}
+            onChangeText={(t) => { setDosage(t); setErrors((e) => ({ ...e, dosage: null })); }}
+            placeholder="Ex : 500 mg · 1 comprimé"
+            placeholderTextColor={COLORS.textSoft}
+            returnKeyType="next"
+            onFocus={() => setFocusField('dosage')}
+            onBlur={()  => setFocusField(null)}
+            accessible
+            accessibilityLabel="Dosage"
+          />
+          {errors.dosage && <Text style={styles.errTxt}>⚠  {errors.dosage}</Text>}
+        </View>
+
+        {/* ── FRÉQUENCE ───────────────────────────────────── */}
+        <View style={G.inputWrap}>
+          <Text style={G.inputLabel}>🔁  Fréquence *</Text>
+          <View style={styles.freqRow}>
+            {[
+              { key: 'daily',   label: 'Quotidien'     },
+              { key: 'weekly',  label: 'Hebdomadaire'  },
+            ].map(({ key, label }) => (
               <TouchableOpacity
-                key={day.value}
-                style={[styles.dayButton, selectedDays.includes(day.value) && styles.dayButtonActive]}
-                onPress={() => toggleDay(day.value)}
+                key={key}
+                style={[styles.freqPill, frequency === key && styles.freqPillActive]}
+                onPress={() => {
+                  setFrequency(key);
+                  setErrors((e) => ({ ...e, days: null }));
+                }}
+                accessible
+                accessibilityRole="radio"
+                accessibilityState={{ selected: frequency === key }}
               >
-                <Text style={[styles.dayButtonText, selectedDays.includes(day.value) && styles.dayButtonTextActive]}>
-                  {day.label}
+                <Text style={[styles.freqPillTxt, frequency === key && styles.freqPillTxtActive]}>
+                  {label}
                 </Text>
               </TouchableOpacity>
             ))}
           </View>
-          {errors.days && <Text style={styles.errorMsg}>{errors.days}</Text>}
         </View>
-      )}
 
-      {/* ---- HEURE DU RAPPEL ---- */}
-      <View style={GlobalStyles.inputContainer}>
-        <Text style={GlobalStyles.inputLabel}>⏰ Heure du rappel *</Text>
-        <TouchableOpacity
-          style={styles.timePickerButton}
-          onPress={() => setShowTimePicker(true)}
-        >
-          <Text style={styles.timePickerText}>
-            {reminderTime.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
-          </Text>
-          <Text style={styles.timePickerIcon}>🕐</Text>
-        </TouchableOpacity>
-
-        {showTimePicker && (
-          <DateTimePicker
-            value={reminderTime}
-            mode="time"
-            is24Hour
-            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-            onChange={(event, selectedTime) => {
-              setShowTimePicker(Platform.OS === 'ios'); // Reste ouvert sur iOS
-              if (selectedTime) setReminderTime(selectedTime);
-            }}
-            locale="fr-FR"
-          />
+        {/* ── JOURS (hebdomadaire uniquement) ─────────────── */}
+        {frequency === 'weekly' && (
+          <View style={G.inputWrap}>
+            <Text style={G.inputLabel}>📅  Jours de la semaine *</Text>
+            <View style={styles.daysRow}>
+              {DAYS.map((day) => {
+                const active = selectedDays.includes(day.value);
+                return (
+                  <TouchableOpacity
+                    key={day.value}
+                    style={[styles.dayCircle, active && styles.dayCircleActive]}
+                    onPress={() => {
+                      toggleDay(day.value);
+                      setErrors((e) => ({ ...e, days: null }));
+                    }}
+                    accessible
+                    accessibilityRole="checkbox"
+                    accessibilityState={{ checked: active }}
+                    accessibilityLabel={day.label}
+                  >
+                    <Text style={[styles.dayCircleTxt, active && styles.dayCircleTxtActive]}>
+                      {day.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+            {errors.days && <Text style={styles.errTxt}>⚠  {errors.days}</Text>}
+          </View>
         )}
-        {/* Bouton "Confirmer" pour iOS (le picker reste ouvert) */}
-        {showTimePicker && Platform.OS === 'ios' && (
+
+        {/* ── HEURE ───────────────────────────────────────── */}
+        <View style={G.inputWrap}>
+          <Text style={G.inputLabel}>⏰  Heure du rappel *</Text>
+
+          {/* Affichage heure — tap pour ouvrir le picker */}
           <TouchableOpacity
-            style={styles.confirmTimeButton}
-            onPress={() => setShowTimePicker(false)}
+            style={styles.timeDisplay}
+            onPress={() => setShowPicker(true)}
+            accessible
+            accessibilityRole="button"
+            accessibilityLabel={`Heure sélectionnée : ${hh} heures ${mm}`}
           >
-            <Text style={styles.confirmTimeText}>Confirmer l'heure</Text>
+            <Text style={styles.timeTxt}>{hh}  :  {mm}</Text>
+            <Text style={styles.timeHint}>✏️  Modifier</Text>
           </TouchableOpacity>
-        )}
-      </View>
 
-      {/* ---- PHOTO DE LA BOÎTE ---- */}
-      <View style={GlobalStyles.inputContainer}>
-        <Text style={GlobalStyles.inputLabel}>📸 Photo de la boîte (optionnel)</Text>
+          {/* Picker natif */}
+          {showPicker && (
+            <DateTimePicker
+              value={reminderTime}
+              mode="time"
+              is24Hour
+              display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+              onChange={(event, selected) => {
+                // Android ferme automatiquement ; iOS reste ouvert
+                if (Platform.OS !== 'ios') setShowPicker(false);
+                if (selected) setReminderTime(selected);
+              }}
+              locale="fr-FR"
+            />
+          )}
 
-        {photoUri ? (
-          <View>
-            <Image source={{ uri: photoUri }} style={styles.previewPhoto} />
-            <TouchableOpacity style={styles.changePhotoButton} onPress={handleTakePhoto}>
-              <Text style={styles.changePhotoText}>Changer la photo</Text>
+          {/* Bouton "Confirmer" pour iOS */}
+          {showPicker && Platform.OS === 'ios' && (
+            <TouchableOpacity
+              style={styles.confirmTimeBtn}
+              onPress={() => setShowPicker(false)}
+              accessible
+              accessibilityRole="button"
+            >
+              <Text style={styles.confirmTimeTxt}>✓  Confirmer l'heure</Text>
             </TouchableOpacity>
-          </View>
-        ) : (
-          <View style={styles.photoActions}>
-            <TouchableOpacity style={styles.photoActionButton} onPress={handleTakePhoto}>
-              <Text style={styles.photoActionEmoji}>📷</Text>
-              <Text style={styles.photoActionText}>Prendre une photo</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.photoActionButton} onPress={handlePickFromGallery}>
-              <Text style={styles.photoActionEmoji}>🖼️</Text>
-              <Text style={styles.photoActionText}>Depuis la galerie</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-      </View>
+          )}
+        </View>
 
-      {/* ---- BOUTON SOUMETTRE ---- */}
-      <TouchableOpacity
-        style={[GlobalStyles.buttonPrimary, isLoading && styles.buttonDisabled]}
-        onPress={handleSubmit}
-        disabled={isLoading}
-        activeOpacity={0.85}
-      >
-        {isLoading ? (
-          <ActivityIndicator size="large" color={COLORS.white} />
-        ) : (
-          <Text style={GlobalStyles.buttonPrimaryText}>✅ Enregistrer le médicament</Text>
-        )}
-      </TouchableOpacity>
+        {/* ── BOUTON ENREGISTRER ──────────────────────────── */}
+        <Animated.View style={{ transform: [{ scale: btnScale }] }}>
+          <TouchableOpacity
+            style={[G.btnCoral, isLoading && styles.btnDisabled]}
+            onPress={handleSubmit}
+            onPressIn={onPressIn}
+            onPressOut={onPressOut}
+            disabled={isLoading}
+            activeOpacity={1}
+            accessible
+            accessibilityRole="button"
+            accessibilityLabel="Enregistrer le médicament"
+          >
+            {isLoading
+              ? <ActivityIndicator size="large" color={COLORS.white} />
+              : <Text style={G.btnCoralTxt}>💾  Enregistrer le médicament</Text>
+            }
+          </TouchableOpacity>
+        </Animated.View>
 
-      <View style={{ height: 60 }} />
-    </ScrollView>
+        <View style={{ height: 60 }} />
+      </ScrollView>
+    </View>
   );
-};
+}
 
-// ============================================================
-// STYLES LOCAUX
-// ============================================================
+// ================================================================
+// STYLES
+// ================================================================
 const styles = StyleSheet.create({
-  container: {
+
+  root: {
     flex: 1,
-    backgroundColor: COLORS.adminLight,
+    backgroundColor: COLORS.cream,
   },
 
-  content: {
-    padding: SIZES.padding.screen,
-    paddingTop: Platform.OS === 'ios' ? 60 : 40,
+  scroll: {
+    paddingHorizontal: SIZES.padH,
+    paddingTop: SIZES.padTop,
+    paddingBottom: 40,
   },
 
+  // Header
   header: {
-    marginBottom: SIZES.spacing.lg,
-  },
-
-  backButton: {
-    marginBottom: SIZES.spacing.sm,
-    padding: SIZES.spacing.xs,
-  },
-
-  backButtonText: {
-    fontSize: TYPOGRAPHY.sm,
-    color: COLORS.primary,
-    fontWeight: TYPOGRAPHY.medium,
-  },
-
-  headerTitle: {
-    fontSize: TYPOGRAPHY.lg,
-    fontWeight: TYPOGRAPHY.black,
-    color: COLORS.textDark,
-  },
-
-  inputError: {
-    borderColor: COLORS.alert,
-    borderWidth: 2,
-  },
-
-  errorMsg: {
-    fontSize: TYPOGRAPHY.xs - 2,
-    color: COLORS.alert,
-    marginTop: 4,
-    fontWeight: TYPOGRAPHY.medium,
-  },
-
-  // Boutons fréquence
-  frequencyRow: {
     flexDirection: 'row',
-    gap: SIZES.spacing.sm,
+    alignItems: 'flex-start',
+    marginBottom: 30,
+  },
+  pageTitle: {
+    fontSize: FONTS.md,
+    fontWeight: FONTS.black,
+    color: COLORS.textDark,
+    letterSpacing: -0.8,
+    lineHeight: FONTS.lh(FONTS.md),
+  },
+  pageSub: {
+    fontSize: FONTS.xs - 2,
+    fontWeight: FONTS.regular,
+    color: COLORS.textSoft,
+    marginTop: 3,
   },
 
-  freqButton: {
+  // Photo pickers
+  photoPickerRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 26,
+  },
+  photoPicker: {
     flex: 1,
-    height: SIZES.buttonHeight - 10,
-    borderRadius: 14,
-    borderWidth: 2,
-    borderColor: COLORS.border,
+    height: 132,
+    backgroundColor: COLORS.warmWhite,
+    borderRadius: RADIUS.lg,
+    borderWidth: 2.5,
+    borderStyle: 'dashed',
+    borderColor: COLORS.coral,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: COLORS.white,
+    gap: 10,
+    ...SHADOWS.sm,
+  },
+  photoPickerEmoji: { fontSize: 36 },
+  photoPickerTxt: {
+    fontSize: FONTS.xs - 2,
+    fontWeight: FONTS.heavy,
+    color: COLORS.coral,
+    textAlign: 'center',
   },
 
-  freqButtonActive: {
-    borderColor: COLORS.primary,
-    backgroundColor: COLORS.primaryLight,
+  // Aperçu photo
+  photoPreviewWrap: {
+    marginBottom: 26,
+    borderRadius: RADIUS.lg,
+    overflow: 'hidden',
+    ...SHADOWS.md,
+  },
+  photoPreview: {
+    width: '100%',
+    height: 200,
+    resizeMode: 'cover',
+  },
+  changePhotoBtn: {
+    paddingVertical: 15,
+    alignItems: 'center',
+    backgroundColor: COLORS.coralLight,
+  },
+  changePhotoBtnTxt: {
+    fontSize: FONTS.xs,
+    fontWeight: FONTS.heavy,
+    color: COLORS.coral,
   },
 
-  freqButtonText: {
-    fontSize: TYPOGRAPHY.sm,
-    fontWeight: TYPOGRAPHY.medium,
-    color: COLORS.textMuted,
+  // Erreur champ
+  errTxt: {
+    fontSize: FONTS.xs - 2,
+    fontWeight: FONTS.bold,
+    color: COLORS.coralDark,
+    marginTop: 7,
+    paddingLeft: 4,
   },
 
-  freqButtonTextActive: {
-    color: COLORS.primary,
-    fontWeight: TYPOGRAPHY.bold,
+  // Fréquence
+  freqRow: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  freqPill: {
+    flex: 1,
+    height: 60,
+    borderRadius: RADIUS.md,
+    borderWidth: 2.5,
+    borderColor: COLORS.creamDark,
+    backgroundColor: COLORS.warmWhite,
+    justifyContent: 'center',
+    alignItems: 'center',
+    ...SHADOWS.sm,
+  },
+  freqPillActive: {
+    borderColor: COLORS.coral,
+    backgroundColor: COLORS.coralLight,
+    ...SHADOWS.coral,
+  },
+  freqPillTxt: {
+    fontSize: FONTS.xs,
+    fontWeight: FONTS.heavy,
+    color: COLORS.textSoft,
+  },
+  freqPillTxtActive: {
+    color: COLORS.coral,
   },
 
-  // Jours de la semaine
+  // Jours semaine
   daysRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: SIZES.spacing.xs,
+    justifyContent: 'space-between',
+    gap: 4,
   },
-
-  dayButton: {
-    width: 54,
-    height: 54,
-    borderRadius: 27,
-    borderWidth: 2,
-    borderColor: COLORS.border,
+  dayCircle: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    borderWidth: 2.5,
+    borderColor: COLORS.creamDark,
+    backgroundColor: COLORS.warmWhite,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: COLORS.white,
   },
-
-  dayButtonActive: {
-    borderColor: COLORS.primary,
-    backgroundColor: COLORS.primary,
+  dayCircleActive: {
+    borderColor: COLORS.coral,
+    backgroundColor: COLORS.coral,
+    ...SHADOWS.coral,
   },
-
-  dayButtonText: {
-    fontSize: TYPOGRAPHY.xs - 2,
-    fontWeight: TYPOGRAPHY.bold,
-    color: COLORS.textMuted,
+  dayCircleTxt: {
+    fontSize: 12,
+    fontWeight: FONTS.black,
+    color: COLORS.textSoft,
   },
-
-  dayButtonTextActive: {
+  dayCircleTxtActive: {
     color: COLORS.white,
   },
 
-  // Time picker
-  timePickerButton: {
-    height: SIZES.inputHeight,
-    backgroundColor: COLORS.white,
-    borderRadius: 14,
-    borderWidth: 2,
-    borderColor: COLORS.border,
+  // Heure
+  timeDisplay: {
+    height: 88,
+    backgroundColor: COLORS.navy,
+    borderRadius: RADIUS.md,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: SIZES.spacing.md,
+    justifyContent: 'center',
+    gap: 22,
+    ...SHADOWS.navy,
+  },
+  timeTxt: {
+    fontSize: FONTS.xxl,
+    fontWeight: FONTS.black,
+    color: COLORS.white,
+    letterSpacing: -3,
+  },
+  timeHint: {
+    fontSize: 15,
+    color: 'rgba(255,255,255,0.48)',
+    fontWeight: FONTS.bold,
   },
 
-  timePickerText: {
-    fontSize: TYPOGRAPHY.md,
-    fontWeight: TYPOGRAPHY.bold,
-    color: COLORS.primary,
-  },
-
-  timePickerIcon: {
-    fontSize: 28,
-  },
-
-  confirmTimeButton: {
-    marginTop: SIZES.spacing.sm,
-    padding: SIZES.spacing.sm,
-    backgroundColor: COLORS.primaryLight,
-    borderRadius: 10,
-    alignItems: 'center',
-  },
-
-  confirmTimeText: {
-    color: COLORS.primary,
-    fontWeight: TYPOGRAPHY.bold,
-    fontSize: TYPOGRAPHY.sm,
-  },
-
-  // Photo
-  previewPhoto: {
-    width: '100%',
-    height: 200,
-    borderRadius: 16,
-    resizeMode: 'cover',
-    marginBottom: SIZES.spacing.sm,
-  },
-
-  changePhotoButton: {
-    padding: SIZES.spacing.sm,
-    alignItems: 'center',
-  },
-
-  changePhotoText: {
-    color: COLORS.primary,
-    fontSize: TYPOGRAPHY.xs,
-    textDecorationLine: 'underline',
-  },
-
-  photoActions: {
-    flexDirection: 'row',
-    gap: SIZES.spacing.sm,
-  },
-
-  photoActionButton: {
-    flex: 1,
-    height: 120,
-    backgroundColor: COLORS.white,
-    borderRadius: 16,
-    borderWidth: 2,
-    borderColor: COLORS.border,
-    borderStyle: 'dashed',
+  confirmTimeBtn: {
+    marginTop: 12,
+    height: 54,
+    backgroundColor: COLORS.navyLight,
+    borderRadius: RADIUS.md,
     justifyContent: 'center',
     alignItems: 'center',
-    gap: SIZES.spacing.xs,
+  },
+  confirmTimeTxt: {
+    fontSize: FONTS.xs,
+    fontWeight: FONTS.heavy,
+    color: COLORS.navy,
   },
 
-  photoActionEmoji: {
-    fontSize: 36,
-  },
-
-  photoActionText: {
-    fontSize: TYPOGRAPHY.xs - 2,
-    color: COLORS.textMuted,
-    textAlign: 'center',
-    fontWeight: TYPOGRAPHY.medium,
-  },
-
-  buttonDisabled: {
-    opacity: 0.6,
+  // Bouton désactivé
+  btnDisabled: {
+    opacity: 0.55,
   },
 });
-
-export default AddMedicationScreen;

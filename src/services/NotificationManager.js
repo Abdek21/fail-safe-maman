@@ -1,297 +1,261 @@
-// ============================================================
-// NotificationManager.js
-// Gestion des notifications locales récurrentes avec expo-notifications
-// Priorité maximale pour assurer la réception même en arrière-plan
-// ============================================================
+// ================================================================
+// NotificationManager.js — VERSION PRODUCTION CORRIGÉE
+//
+// BUGS CORRIGÉS :
+//   1. Crash web : expo-notifications non supporté sur web →
+//      toutes les fonctions sont no-op sur Platform.OS === 'web'
+//   2. AsyncStorage import en haut du fichier (pas au milieu)
+//   3. Guard Device.isDevice robuste (pas de crash simulateur)
+//   4. Gestion erreur propre sur scheduleNotificationAsync
+// ================================================================
 
 import * as Notifications from 'expo-notifications';
-import * as Device from 'expo-device';
-import { Platform } from 'react-native';
+import * as Device        from 'expo-device';
+import AsyncStorage       from '@react-native-async-storage/async-storage';
+import { Platform }       from 'react-native';
 
-// ============================================================
-// CONFIGURATION GLOBALE DES NOTIFICATIONS
-// ============================================================
+const IS_WEB = Platform.OS === 'web';
+const STORAGE_KEY = '@failsafe_notif_ids';
 
-// Comportement des notifications quand l'app est au premier plan
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,    // Affiche la bannière même si l'app est ouverte
-    shouldPlaySound: true,    // Joue le son d'alerte
-    shouldSetBadge: true,     // Met à jour le badge de l'icône
-    priority: Notifications.AndroidNotificationPriority.MAX,
-  }),
-});
+// ----------------------------------------------------------------
+// Configuration globale — ignorée sur web
+// ----------------------------------------------------------------
+if (!IS_WEB) {
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowAlert: true,
+      shouldPlaySound: true,
+      shouldSetBadge:  true,
+      priority: Notifications.AndroidNotificationPriority.MAX,
+    }),
+  });
+}
 
-// ============================================================
-// DEMANDE DE PERMISSIONS
-// ============================================================
+// ================================================================
+// PERMISSIONS
+// ================================================================
 
 /**
- * Demande les permissions de notifications à l'utilisateur.
- * À appeler au premier démarrage de l'application.
- *
- * @returns {Promise<boolean>} true si les permissions sont accordées
+ * Demande les permissions de notifications.
+ * Retourne false sur web (non supporté) sans planter.
  */
 export const requestNotificationPermissions = async () => {
-  // Les notifications locales nécessitent un vrai appareil (pas le simulateur)
-  if (!Device.isDevice) {
-    console.warn('[NotificationManager] Les notifications ne fonctionnent pas sur simulateur.');
+  // Web : expo-notifications non supporté → on sort proprement
+  if (IS_WEB) {
+    console.log('[Notif] Web détecté — notifications ignorées');
     return false;
   }
 
-  // Vérification des permissions existantes
+  // Simulateur : pas de token push possible mais notifs locales OK
+  if (!Device.isDevice) {
+    console.warn('[Notif] Simulateur — les notifs locales peuvent ne pas fonctionner');
+    // On continue quand même pour les notifs locales
+  }
+
   const { status: existingStatus } = await Notifications.getPermissionsAsync();
   let finalStatus = existingStatus;
 
-  // Demande de permission si pas encore accordée
   if (existingStatus !== 'granted') {
     const { status } = await Notifications.requestPermissionsAsync({
       ios: {
-        allowAlert: true,
-        allowBadge: true,
-        allowSound: true,
-        allowCriticalAlerts: true, // Permissions critiques (contournent le mode Ne pas déranger)
+        allowAlert:         true,
+        allowBadge:         true,
+        allowSound:         true,
+        allowCriticalAlerts: true,
       },
     });
     finalStatus = status;
   }
 
   if (finalStatus !== 'granted') {
-    console.warn('[NotificationManager] Permission de notification refusée.');
+    console.warn('[Notif] Permission refusée');
     return false;
   }
 
-  // Configuration spécifique Android : canal de notification haute priorité
+  // Canal Android haute priorité
   if (Platform.OS === 'android') {
     await Notifications.setNotificationChannelAsync('medication-alerts', {
-      name: 'Rappels Médicaments',
-      importance: Notifications.AndroidImportance.MAX,  // Priorité maximale
-      vibrationPattern: [0, 500, 200, 500, 200, 500],   // Vibration triplement répétée
-      lightColor: '#FF0000',                             // Voyant rouge
-      sound: 'default',
-      enableVibrate: true,
-      showBadge: true,
-      bypassDnd: true,  // Contourne le mode "Ne pas déranger"
+      name:             'Rappels Médicaments',
+      importance:       Notifications.AndroidImportance.MAX,
+      vibrationPattern: [0, 500, 200, 500, 200, 500],
+      lightColor:       '#E8603C',
+      sound:            'default',
+      enableVibrate:    true,
+      showBadge:        true,
+      bypassDnd:        true,
     });
   }
 
-  console.log('[NotificationManager] Permissions accordées ✓');
+  console.log('[Notif] Permissions OK');
   return true;
 };
 
-// ============================================================
+// ================================================================
 // PROGRAMMATION DES NOTIFICATIONS
-// ============================================================
+// ================================================================
 
 /**
- * Programme une notification récurrente pour un médicament.
- * Gère deux modes : quotidien et hebdomadaire (jours spécifiques).
- *
- * @param {Object} medication - Objet médicament depuis Supabase
- * @returns {Promise<string[]>} IDs des notifications programmées
+ * Programme les notifications récurrentes d'un médicament.
+ * No-op sur web.
  */
 export const scheduleMedicationNotification = async (medication) => {
+  if (IS_WEB) return [];
+
   const { id, name, dosage, frequency, specific_days, reminder_time } = medication;
-
-  // Parsing de l'heure (format "HH:MM:SS" depuis PostgreSQL)
   const [hours, minutes] = reminder_time.split(':').map(Number);
-
   const scheduledIds = [];
 
-  if (frequency === 'daily') {
-    // Notification quotidienne
-    const notifId = await scheduleRepeatingNotification({
-      medicationId: id,
-      medicationName: name,
-      dosage,
-      hours,
-      minutes,
-      weekday: null, // null = tous les jours
-    });
-    scheduledIds.push(notifId);
+  try {
+    if (frequency === 'daily') {
+      const nid = await _scheduleOne({ id, name, dosage, hours, minutes, weekday: null });
+      scheduledIds.push(nid);
 
-  } else if (frequency === 'weekly' && specific_days && specific_days.length > 0) {
-    // Notification pour chaque jour spécifié
-    // specific_days : tableau d'entiers [0=Dim, 1=Lun, 2=Mar, 3=Mer, 4=Jeu, 5=Ven, 6=Sam]
-    for (const day of specific_days) {
-      const notifId = await scheduleRepeatingNotification({
-        medicationId: id,
-        medicationName: name,
-        dosage,
-        hours,
-        minutes,
-        weekday: day + 1, // expo-notifications : 1=Dim, 2=Lun ... 7=Sam
-      });
-      scheduledIds.push(notifId);
+    } else if (frequency === 'weekly' && specific_days?.length > 0) {
+      for (const day of specific_days) {
+        const nid = await _scheduleOne({
+          id, name, dosage, hours, minutes,
+          weekday: day + 1, // expo : 1=Dim…7=Sam
+        });
+        scheduledIds.push(nid);
+      }
     }
+
+    await _saveIds(id, scheduledIds);
+    console.log(`[Notif] ${scheduledIds.length} notif(s) programmée(s) pour "${name}"`);
+  } catch (err) {
+    console.error('[Notif] Erreur programmation :', err.message);
   }
 
-  // Sauvegarde des IDs dans AsyncStorage pour pouvoir les annuler plus tard
-  await saveNotificationIds(id, scheduledIds);
-
-  console.log(`[NotificationManager] ${scheduledIds.length} notification(s) programmée(s) pour "${name}"`);
   return scheduledIds;
 };
 
 /**
- * Annule toutes les notifications d'un médicament spécifique
- * @param {string} medicationId - ID du médicament
+ * Annule les notifications d'un médicament spécifique.
  */
 export const cancelMedicationNotifications = async (medicationId) => {
-  const ids = await getNotificationIds(medicationId);
-
-  for (const notifId of ids) {
-    await Notifications.cancelScheduledNotificationAsync(notifId);
+  if (IS_WEB) return;
+  const ids = await _getIds(medicationId);
+  for (const nid of ids) {
+    await Notifications.cancelScheduledNotificationAsync(nid).catch(() => {});
   }
-
-  await removeNotificationIds(medicationId);
-  console.log(`[NotificationManager] Notifications annulées pour medication ID : ${medicationId}`);
+  await _removeIds(medicationId);
+  console.log('[Notif] Notifications annulées pour', medicationId);
 };
 
 /**
- * Annule TOUTES les notifications programmées
- * (utile lors de la déconnexion)
+ * Annule TOUTES les notifications (ex : déconnexion).
  */
 export const cancelAllNotifications = async () => {
+  if (IS_WEB) return;
   await Notifications.cancelAllScheduledNotificationsAsync();
-  console.log('[NotificationManager] Toutes les notifications annulées.');
+  console.log('[Notif] Toutes les notifications annulées');
 };
 
 /**
- * Reprogramme toutes les notifications depuis la liste de médicaments
- * (utile après une modification ou au redémarrage de l'app)
- *
- * @param {Array} medications - Liste des médicaments actifs
+ * Reprogramme toutes les notifications depuis la liste de médicaments.
+ * Appelé au démarrage de l'app après reconnexion.
  */
 export const rescheduleAllNotifications = async (medications) => {
+  if (IS_WEB) return;
   await cancelAllNotifications();
-
-  for (const medication of medications) {
-    await scheduleMedicationNotification(medication);
+  for (const med of medications) {
+    await scheduleMedicationNotification(med);
   }
-
-  console.log(`[NotificationManager] ${medications.length} médicament(s) reprogrammé(s).`);
+  console.log(`[Notif] ${medications.length} médicament(s) reprogrammé(s)`);
 };
 
-// ============================================================
-// LISTENER — Réponse à l'interaction avec la notification
-// ============================================================
+// ================================================================
+// LISTENERS
+// ================================================================
 
 /**
- * Configure le listener de réponse aux notifications.
- * À appeler dans App.js au démarrage.
- *
- * @param {Function} onMedicationAlert - Callback reçevant l'ID du médicament
- * @returns {Function} Fonction de nettoyage (à appeler dans useEffect cleanup)
+ * Listener : tap sur la notification depuis la barre système.
+ * Retourne la fonction de cleanup pour useEffect.
+ * No-op sur web.
  */
-export const setupNotificationResponseListener = (onMedicationAlert) => {
-  // L'utilisateur a tapé sur la notification
-  const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
-    const medicationId = response.notification.request.content.data?.medicationId;
-    if (medicationId && onMedicationAlert) {
-      console.log(`[NotificationManager] Notification tapée pour medication ID : ${medicationId}`);
-      onMedicationAlert(medicationId);
-    }
+export const setupNotificationResponseListener = (onAlert) => {
+  if (IS_WEB) return () => {};
+
+  const sub = Notifications.addNotificationResponseReceivedListener((response) => {
+    const medId = response.notification.request.content.data?.medicationId;
+    console.log('[Notif] Tap sur notif, medId =', medId);
+    if (medId && onAlert) onAlert(medId);
   });
 
-  // Retourne la fonction de nettoyage
-  return () => subscription.remove();
+  return () => sub.remove();
 };
 
 /**
- * Configure le listener de réception (notification reçue alors que l'app est ouverte)
- * @param {Function} onReceived - Callback avec la notification
- * @returns {Function} Fonction de nettoyage
+ * Listener : notification reçue pendant que l'app est ouverte.
+ * Retourne la fonction de cleanup pour useEffect.
+ * No-op sur web.
  */
 export const setupNotificationReceivedListener = (onReceived) => {
-  const subscription = Notifications.addNotificationReceivedListener((notification) => {
-    const medicationId = notification.request.content.data?.medicationId;
-    console.log(`[NotificationManager] Notification reçue pour medication ID : ${medicationId}`);
+  if (IS_WEB) return () => {};
+
+  const sub = Notifications.addNotificationReceivedListener((notification) => {
+    const medId = notification.request.content.data?.medicationId;
+    console.log('[Notif] Reçue, medId =', medId);
     if (onReceived) onReceived(notification);
   });
 
-  return () => subscription.remove();
+  return () => sub.remove();
 };
 
-// ============================================================
-// HELPERS PRIVÉS
-// ============================================================
+// ================================================================
+// PRIVÉ
+// ================================================================
 
-/**
- * Programme une notification récurrente (quotidienne ou hebdomadaire)
- * @private
- */
-const scheduleRepeatingNotification = async ({
-  medicationId,
-  medicationName,
-  dosage,
-  hours,
-  minutes,
-  weekday, // null pour quotidien, 1-7 pour hebdomadaire
-}) => {
+const _scheduleOne = async ({ id, name, dosage, hours, minutes, weekday }) => {
   const trigger = weekday
-    ? { weekday, hour: hours, minute: minutes, repeats: true } // Hebdomadaire
-    : { hour: hours, minute: minutes, repeats: true };          // Quotidien
+    ? { weekday, hour: hours, minute: minutes, repeats: true }
+    : { hour: hours, minute: minutes, repeats: true };
 
-  const notificationId = await Notifications.scheduleNotificationAsync({
+  return Notifications.scheduleNotificationAsync({
     content: {
-      title: '💊 Rappel Médicament',
-      body: dosage
-        ? `C'est l'heure de prendre ${medicationName} — ${dosage}`
-        : `C'est l'heure de prendre ${medicationName}`,
-      sound: 'default',
-      priority: Notifications.AndroidNotificationPriority.MAX,
-      // Données custom pour identifier le médicament lors du tap
-      data: { medicationId, medicationName },
-      // Android uniquement
+      title:     '💊 Rappel Médicament',
+      body:      dosage
+        ? `C'est l'heure de prendre ${name} — ${dosage}`
+        : `C'est l'heure de prendre ${name}`,
+      sound:     'default',
+      data:      { medicationId: id, medicationName: name },
       channelId: 'medication-alerts',
-      // Badge
-      badge: 1,
+      badge:     1,
+      priority:  Notifications.AndroidNotificationPriority.MAX,
     },
     trigger,
   });
-
-  return notificationId;
 };
 
-// ============================================================
-// PERSISTANCE DES IDs DE NOTIFICATIONS (via AsyncStorage)
-// ============================================================
-
-import AsyncStorage from '@react-native-async-storage/async-storage';
-
-const NOTIF_STORAGE_KEY = '@failsafe_notification_ids';
-
-const saveNotificationIds = async (medicationId, notifIds) => {
+const _saveIds = async (medicationId, ids) => {
   try {
-    const existing = await AsyncStorage.getItem(NOTIF_STORAGE_KEY);
-    const map = existing ? JSON.parse(existing) : {};
-    map[medicationId] = notifIds;
-    await AsyncStorage.setItem(NOTIF_STORAGE_KEY, JSON.stringify(map));
-  } catch (err) {
-    console.error('[NotificationManager] Erreur sauvegarde IDs :', err);
+    const raw  = await AsyncStorage.getItem(STORAGE_KEY);
+    const map  = raw ? JSON.parse(raw) : {};
+    map[medicationId] = ids;
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(map));
+  } catch (e) {
+    console.error('[Notif] _saveIds :', e.message);
   }
 };
 
-const getNotificationIds = async (medicationId) => {
+const _getIds = async (medicationId) => {
   try {
-    const existing = await AsyncStorage.getItem(NOTIF_STORAGE_KEY);
-    if (!existing) return [];
-    const map = JSON.parse(existing);
-    return map[medicationId] || [];
+    const raw = await AsyncStorage.getItem(STORAGE_KEY);
+    if (!raw) return [];
+    return JSON.parse(raw)[medicationId] ?? [];
   } catch {
     return [];
   }
 };
 
-const removeNotificationIds = async (medicationId) => {
+const _removeIds = async (medicationId) => {
   try {
-    const existing = await AsyncStorage.getItem(NOTIF_STORAGE_KEY);
-    if (!existing) return;
-    const map = JSON.parse(existing);
+    const raw = await AsyncStorage.getItem(STORAGE_KEY);
+    if (!raw) return;
+    const map = JSON.parse(raw);
     delete map[medicationId];
-    await AsyncStorage.setItem(NOTIF_STORAGE_KEY, JSON.stringify(map));
-  } catch (err) {
-    console.error('[NotificationManager] Erreur suppression IDs :', err);
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(map));
+  } catch (e) {
+    console.error('[Notif] _removeIds :', e.message);
   }
 };
